@@ -12,12 +12,16 @@ import { fileURLToPath } from 'url';
 import { initDb } from './db.js';
 import crypto from 'crypto';
 
+// Unbuffer stdout for immediate logging in production environments like Render
+if (process.stdout._handle && typeof process.stdout._handle.setBlocking === 'function') {
+  process.stdout._handle.setBlocking(true);
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Check if default secret is used in production
 let JWT_SECRET = process.env.JWT_SECRET;
 if (process.env.NODE_ENV === 'production' && (!JWT_SECRET || JWT_SECRET === 'farmguard_secret_key_123')) {
-  console.warn('WARNING: No secure JWT_SECRET specified in production environment. Generating a random key for this session...');
   JWT_SECRET = crypto.randomBytes(32).toString('hex');
 } else {
   JWT_SECRET = JWT_SECRET || 'farmguard_secret_key_123';
