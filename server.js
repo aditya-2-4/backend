@@ -31,9 +31,9 @@ const app = express();
 const server = createServer(app);
 
 // Configure CORS securely
-const allowedOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+const allowedOrigin = process.env.CORS_ORIGIN;
 app.use(cors({
-  origin: allowedOrigin,
+  origin: allowedOrigin ? allowedOrigin : (origin, callback) => callback(null, true),
   credentials: true
 }));
 app.use(express.json());
