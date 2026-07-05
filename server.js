@@ -10,15 +10,18 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { initDb } from './db.js';
+import crypto from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Check if default secret is used in production
-if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'farmguard_secret_key_123')) {
-  console.error('FATAL SECURITY ERROR: You must specify a secure JWT_SECRET in production environment variables.');
-  process.exit(1);
+let JWT_SECRET = process.env.JWT_SECRET;
+if (process.env.NODE_ENV === 'production' && (!JWT_SECRET || JWT_SECRET === 'farmguard_secret_key_123')) {
+  console.warn('WARNING: No secure JWT_SECRET specified in production environment. Generating a random key for this session...');
+  JWT_SECRET = crypto.randomBytes(32).toString('hex');
+} else {
+  JWT_SECRET = JWT_SECRET || 'farmguard_secret_key_123';
 }
-const JWT_SECRET = process.env.JWT_SECRET || 'farmguard_secret_key_123';
 
 const app = express();
 const server = createServer(app);
