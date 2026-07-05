@@ -150,6 +150,11 @@ writePlaceholderFiles();
 // REST API ENDPOINTS
 // ==========================================
 
+// Redirect root path to the health check dashboard
+app.get('/', (req, res) => {
+  res.redirect('/api/health');
+});
+
 // Public Health Check Endpoint (For direct browser click testing!)
 app.get('/api/health', (req, res) => {
   const healthData = {
