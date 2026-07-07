@@ -126,15 +126,8 @@ export async function initDb() {
     console.log('Seeded ESP32 device status');
   }
 
-  // Seed biometrics if empty
-  const bioCount = await db.get('SELECT COUNT(*) as count FROM authorized_biometrics');
-  if (bioCount.count === 0) {
-    const now = new Date().toISOString();
-    await db.run(`INSERT INTO authorized_biometrics (name, type, identifier, enrolled_at) VALUES (?, ?, ?, ?)`, ['John (Owner)', 'Face', 'face_enc_john_182f0', now]);
-    await db.run(`INSERT INTO authorized_biometrics (name, type, identifier, enrolled_at) VALUES (?, ?, ?, ?)`, ['Sarah (Family)', 'RFID', 'RFID_A892F1C', now]);
-    await db.run(`INSERT INTO authorized_biometrics (name, type, identifier, enrolled_at) VALUES (?, ?, ?, ?)`, ['Dave (Ranger)', 'RFID', 'RFID_B129C3E', now]);
-    console.log('Seeded biometric users');
-  }
+  // Seed biometrics if empty (Disabled to prevent fake data in production)
+  // Seeding removed per user request
 
   // Seed default detection zones if empty
   const zoneCount = await db.get('SELECT COUNT(*) as count FROM zones');
@@ -193,55 +186,11 @@ export async function initDb() {
     console.log('Seeded livestock locations history');
   }
 
-  // Seed events if empty
-  const eventCount = await db.get('SELECT COUNT(*) as count FROM events');
-  if (eventCount.count === 0) {
-    const now = new Date();
-    await db.run(`INSERT INTO events (timestamp, media_path, media_type, detection_type, zone_name, is_recognized) VALUES (?, ?, ?, ?, ?, ?)`, [
-      new Date(now.getTime() - 7200000).toISOString(), // 2 hours ago
-      '/uploads/event1.jpg',
-      'photo',
-      'Recognized Owner',
-      'Main Barn Entrance',
-      1
-    ]);
-    await db.run(`INSERT INTO events (timestamp, media_path, media_type, detection_type, zone_name, is_recognized) VALUES (?, ?, ?, ?, ?, ?)`, [
-      new Date(now.getTime() - 3600000).toISOString(), // 1 hour ago
-      '/uploads/event2.jpg',
-      'photo',
-      'Animal Ignored',
-      'North Pasture Gate',
-      0
-    ]);
-    await db.run(`INSERT INTO events (timestamp, media_path, media_type, detection_type, zone_name, is_recognized) VALUES (?, ?, ?, ?, ?, ?)`, [
-      new Date(now.getTime() - 900000).toISOString(), // 15 mins ago
-      '/uploads/event3.jpg',
-      'photo',
-      'Human Detected',
-      'North Pasture Gate',
-      0
-    ]);
-    console.log('Seeded security events');
-  }
+  // Seed events if empty (Disabled to prevent fake data in production)
+  // Seeding removed per user request
 
-  // Seed alerts if empty
-  const alertCount = await db.get('SELECT COUNT(*) as count FROM alerts');
-  if (alertCount.count === 0) {
-    const now = new Date();
-    await db.run(`INSERT INTO alerts (timestamp, type, message, status) VALUES (?, ?, ?, ?)`, [
-      new Date(now.getTime() - 7200000).toISOString(),
-      'Push',
-      'Authorized entry: John (Owner) recognized at Main Barn Entrance.',
-      'Delivered'
-    ]);
-    await db.run(`INSERT INTO alerts (timestamp, type, message, status) VALUES (?, ?, ?, ?)`, [
-      new Date(now.getTime() - 900000).toISOString(),
-      'SMS',
-      'FarmGuard WARNING: Unrecognized Human detected in North Pasture Gate zone! Arm state: ARMED.',
-      'Delivered'
-    ]);
-    console.log('Seeded alerts log');
-  }
+  // Seed alerts if empty (Disabled to prevent fake data in production)
+  // Seeding removed per user request
 
   return db;
 }
