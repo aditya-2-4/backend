@@ -317,7 +317,7 @@ app.get('/api/health', (req, res) => {
               <span class="value" style="font-size: 11px;">${healthData.timestamp}</span>
             </div>
           </div>
-          <a href="${allowedOrigin || 'http://localhost:5173'}" class="btn">Open Main Dashboard</a>
+          <a href="${process.env.FRONTEND_URL || allowedOrigin || 'https://github.com/aditya-2-4/frontend'}" class="btn">Open Main Dashboard</a>
         </div>
       </body>
       </html>
