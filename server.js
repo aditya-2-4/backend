@@ -47,9 +47,6 @@ if (!fs.existsSync(uploadsDir)) {
 // Serve uploaded files statically
 app.use('/uploads', express.static(uploadsDir));
 
-// Serve React Frontend statically
-app.use(express.static(path.join(__dirname, 'public')));
-
 // Initialize Database connection
 let db;
 try {
@@ -152,6 +149,11 @@ writePlaceholderFiles();
 // ==========================================
 // REST API ENDPOINTS
 // ==========================================
+
+// Redirect root path to the health check dashboard
+app.get('/', (req, res) => {
+  res.redirect('/api/health');
+});
 
 // Public Health Check Endpoint (For direct browser click testing!)
 app.get('/api/health', (req, res) => {
@@ -830,14 +832,6 @@ app.post('/api/device/arm-toggle', authenticateToken, async (req, res) => {
     console.error(err);
     res.status(500).json({ error: 'Failed to toggle arm state' });
   }
-});
-
-// Serve React Frontend for any unknown routes
-app.get('*', (req, res) => {
-  if (req.path.startsWith('/api')) {
-    return res.status(404).json({ error: 'API endpoint not found' });
-  }
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Listen on environment port or fallback to 5000
