@@ -156,9 +156,26 @@ app.get('/', (req, res) => {
 });
 
 // Public Health Check Endpoint (For direct browser click testing!)
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  let isOnline = false;
+  if (db) {
+    try {
+      const device = await db.get('SELECT last_heartbeat FROM devices LIMIT 1');
+      if (device && device.last_heartbeat) {
+        const lastHb = new Date(device.last_heartbeat).getTime();
+        const now = Date.now();
+        // Consider offline if no heartbeat for 15 seconds
+        if (now - lastHb < 15000) {
+          isOnline = true;
+        }
+      }
+    } catch (e) {
+      console.error('Error checking device status for health API', e);
+    }
+  }
+
   const healthData = {
-    status: 'online',
+    status: isOnline ? 'online' : 'offline',
     service: 'FarmGuard Gateway API',
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
@@ -232,6 +249,11 @@ app.get('/api/health', (req, res) => {
             align-items: center;
             gap: 6px;
           }
+          .badge.offline {
+            background-color: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+          }
           .pulse {
             width: 8px;
             height: 8px;
@@ -240,6 +262,11 @@ app.get('/api/health', (req, res) => {
             display: inline-block;
             box-shadow: 0 0 8px #10b981;
             animation: pulse-animation 1.5s infinite;
+          }
+          .pulse.offline {
+            background-color: #ef4444;
+            box-shadow: none;
+            animation: none;
           }
           @keyframes pulse-animation {
             0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
@@ -294,9 +321,9 @@ app.get('/api/health', (req, res) => {
         <div class="card">
           <div class="header">
             <h1 class="title">FarmGuard API</h1>
-            <div class="badge">
-              <span class="pulse"></span>
-              <span>Online</span>
+            <div class="badge ${!isOnline ? 'offline' : ''}">
+              <span class="pulse ${!isOnline ? 'offline' : ''}"></span>
+              <span>${isOnline ? 'Online' : 'Offline'}</span>
             </div>
           </div>
           <div class="grid">
