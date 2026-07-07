@@ -709,8 +709,8 @@ app.post('/api/device/livestock/location', verifyDeviceApiKey, async (req, res) 
     );
 
     // Geofencing Check
-    // Center: 38.3245, -122.6512. Radius: ~300 meters which is ~0.0027 lat/lng degrees.
-    const geofenceCenter = { lat: 38.3245, lng: -122.6512 };
+    // Center: 28.6139, 77.2090 (India). Radius: ~300 meters which is ~0.0027 lat/lng degrees.
+    const geofenceCenter = { lat: 28.6139, lng: 77.2090 };
     const dist = Math.sqrt(Math.pow(lat - geofenceCenter.lat, 2) + Math.pow(lng - geofenceCenter.lng, 2));
     
     let status = 'Safe';
