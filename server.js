@@ -999,17 +999,6 @@ app.delete('/api/rfid/:id', authenticateToken, requireRole(['owner']), async (re
   }
 });
 
-// 9. Attendance Endpoints
-app.get('/api/attendance', authenticateToken, async (req, res) => {
-  try {
-    const logs = await db.all("SELECT * FROM attendance ORDER BY timestamp DESC");
-    res.json(logs);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to retrieve attendance logs' });
-  }
-});
-
 // 10. ESP32 Event Webhooks (Face Recognized, RFID Scanned, Unknown Face)
 app.post('/api/device/attendance', verifyDeviceApiKey, async (req, res) => {
   const { method, identifier, confidence } = req.body;
@@ -1031,12 +1020,14 @@ app.post('/api/device/attendance', verifyDeviceApiKey, async (req, res) => {
       if (rfid && rfid.user_name) personName = rfid.user_name;
     }
 
+    const detection_type = method === 'Face' ? 'Recognized Owner' : 'RFID Scanned';
     await db.run(
-      'INSERT INTO attendance (person_name, method, identifier, confidence, timestamp) VALUES (?, ?, ?, ?, ?)',
-      [personName, method, identifier, confidence || null, ts]
+      'INSERT INTO events (timestamp, detection_type, zone_name, is_recognized) VALUES (?, ?, ?, ?)',
+      [ts, detection_type, 'ESP32 Access Point', 1]
     );
 
-    const log = await db.get('SELECT * FROM attendance WHERE id = last_insert_rowid()');
+    const log = await db.get('SELECT * FROM events WHERE id = last_insert_rowid()');
+    log.person_name = personName;
 
     if (method === 'Face') {
       broadcast({ type: 'FACE_RECOGNIZED', log });

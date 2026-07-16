@@ -129,17 +129,6 @@ export async function initDb() {
     )
   `);
 
-  // Create Attendance table
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS attendance (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      person_name TEXT,
-      method TEXT NOT NULL, -- 'Face', 'RFID'
-      identifier TEXT, -- Face ID or RFID UID
-      confidence REAL, -- If face recognized, % confidence
-      timestamp TEXT NOT NULL
-    )
-  `);
 
   // Create Unknown Faces table
   await db.exec(`
