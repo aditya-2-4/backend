@@ -105,6 +105,51 @@ export async function initDb() {
     )
   `);
 
+  // Create Faces table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS faces (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      employee_id TEXT UNIQUE,
+      department TEXT,
+      face_encoding_id INTEGER, -- ID used by ESP32 (usually 1-N)
+      registered_at TEXT NOT NULL,
+      status TEXT DEFAULT 'Active' -- 'Active', 'Disabled'
+    )
+  `);
+
+  // Create RFID Cards table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS rfid_cards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      uid TEXT UNIQUE NOT NULL,
+      user_name TEXT, -- Optionally tie to a face name or standalone
+      status TEXT DEFAULT 'Active', -- 'Active', 'Inactive'
+      registered_at TEXT NOT NULL
+    )
+  `);
+
+  // Create Attendance table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS attendance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_name TEXT,
+      method TEXT NOT NULL, -- 'Face', 'RFID'
+      identifier TEXT, -- Face ID or RFID UID
+      confidence REAL, -- If face recognized, % confidence
+      timestamp TEXT NOT NULL
+    )
+  `);
+
+  // Create Unknown Faces table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS unknown_faces (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      image_path TEXT,
+      timestamp TEXT NOT NULL
+    )
+  `);
+
   // Seed default admin user if empty
   const userCount = await db.get('SELECT COUNT(*) as count FROM users');
   if (userCount.count === 0) {

@@ -861,7 +861,227 @@ app.post('/api/device/arm-toggle', authenticateToken, async (req, res) => {
   }
 });
 
-// Listen on environment port or fallback to 5000
+// ==========================================
+// ESP32 SMART FACE RECOGNITION & RFID APIs
+// ==========================================
+
+// 7. Face Management Endpoints
+app.get('/api/faces', authenticateToken, async (req, res) => {
+  try {
+    const faces = await db.all("SELECT * FROM faces ORDER BY registered_at DESC");
+    res.json(faces);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to retrieve faces' });
+  }
+});
+
+app.post('/api/faces/register', authenticateToken, requireRole(['owner']), async (req, res) => {
+  const { name, employee_id, department, face_encoding_id } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+
+  try {
+    const ts = new Date().toISOString();
+    await db.run(
+      'INSERT INTO faces (name, employee_id, department, face_encoding_id, registered_at, status) VALUES (?, ?, ?, ?, ?, ?)',
+      [name, employee_id || null, department || null, face_encoding_id || null, ts, 'Active']
+    );
+
+    const newFace = await db.get('SELECT * FROM faces WHERE id = last_insert_rowid()');
+    
+    broadcast({
+      type: 'FACE_REGISTERED',
+      face: newFace
+    });
+
+    res.status(201).json(newFace);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to register face (employee ID might not be unique)' });
+  }
+});
+
+app.put('/api/faces/:id', authenticateToken, requireRole(['owner']), async (req, res) => {
+  const { id } = req.params;
+  const { name, employee_id, department, status } = req.body;
+  try {
+    const existing = await db.get('SELECT * FROM faces WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'Face not found' });
+
+    await db.run(
+      'UPDATE faces SET name = ?, employee_id = ?, department = ?, status = ? WHERE id = ?',
+      [name || existing.name, employee_id || existing.employee_id, department || existing.department, status || existing.status, id]
+    );
+
+    const updated = await db.get('SELECT * FROM faces WHERE id = ?', [id]);
+    res.json(updated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to update face' });
+  }
+});
+
+app.delete('/api/faces/:id', authenticateToken, requireRole(['owner']), async (req, res) => {
+  const { id } = req.params;
+  try {
+    await db.run('DELETE FROM faces WHERE id = ?', [id]);
+    
+    broadcast({
+      type: 'FACE_DELETED',
+      faceId: id
+    });
+
+    res.json({ success: true, message: 'Face removed successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to delete face' });
+  }
+});
+
+// 8. RFID Management Endpoints
+app.get('/api/rfid', authenticateToken, async (req, res) => {
+  try {
+    const cards = await db.all("SELECT * FROM rfid_cards ORDER BY registered_at DESC");
+    res.json(cards);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to retrieve RFID cards' });
+  }
+});
+
+app.post('/api/rfid/register', authenticateToken, requireRole(['owner']), async (req, res) => {
+  const { uid, user_name } = req.body;
+  if (!uid) return res.status(400).json({ error: 'UID is required' });
+
+  try {
+    const ts = new Date().toISOString();
+    await db.run(
+      'INSERT INTO rfid_cards (uid, user_name, status, registered_at) VALUES (?, ?, ?, ?)',
+      [uid, user_name || null, 'Active', ts]
+    );
+
+    const newCard = await db.get('SELECT * FROM rfid_cards WHERE id = last_insert_rowid()');
+    res.status(201).json(newCard);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to register RFID (UID must be unique)' });
+  }
+});
+
+app.put('/api/rfid/:id', authenticateToken, requireRole(['owner']), async (req, res) => {
+  const { id } = req.params;
+  const { user_name, status } = req.body;
+  try {
+    const existing = await db.get('SELECT * FROM rfid_cards WHERE id = ?', [id]);
+    if (!existing) return res.status(404).json({ error: 'RFID card not found' });
+
+    await db.run(
+      'UPDATE rfid_cards SET user_name = ?, status = ? WHERE id = ?',
+      [user_name !== undefined ? user_name : existing.user_name, status || existing.status, id]
+    );
+
+    const updated = await db.get('SELECT * FROM rfid_cards WHERE id = ?', [id]);
+    res.json(updated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to update RFID card' });
+  }
+});
+
+app.delete('/api/rfid/:id', authenticateToken, requireRole(['owner']), async (req, res) => {
+  const { id } = req.params;
+  try {
+    await db.run('DELETE FROM rfid_cards WHERE id = ?', [id]);
+    res.json({ success: true, message: 'RFID card removed successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to delete RFID card' });
+  }
+});
+
+// 9. Attendance Endpoints
+app.get('/api/attendance', authenticateToken, async (req, res) => {
+  try {
+    const logs = await db.all("SELECT * FROM attendance ORDER BY timestamp DESC");
+    res.json(logs);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to retrieve attendance logs' });
+  }
+});
+
+// 10. ESP32 Event Webhooks (Face Recognized, RFID Scanned, Unknown Face)
+app.post('/api/device/attendance', verifyDeviceApiKey, async (req, res) => {
+  const { method, identifier, confidence } = req.body;
+  // method: 'Face' or 'RFID'
+  // identifier: Face ID or RFID UID
+  if (!method || !identifier) {
+    return res.status(400).json({ error: 'Method and identifier are required' });
+  }
+
+  try {
+    const ts = new Date().toISOString();
+    let personName = 'Unknown';
+
+    if (method === 'Face') {
+      const face = await db.get('SELECT name FROM faces WHERE face_encoding_id = ? AND status = "Active"', [identifier]);
+      if (face) personName = face.name;
+    } else if (method === 'RFID') {
+      const rfid = await db.get('SELECT user_name FROM rfid_cards WHERE uid = ? AND status = "Active"', [identifier]);
+      if (rfid && rfid.user_name) personName = rfid.user_name;
+    }
+
+    await db.run(
+      'INSERT INTO attendance (person_name, method, identifier, confidence, timestamp) VALUES (?, ?, ?, ?, ?)',
+      [personName, method, identifier, confidence || null, ts]
+    );
+
+    const log = await db.get('SELECT * FROM attendance WHERE id = last_insert_rowid()');
+
+    if (method === 'Face') {
+      broadcast({ type: 'FACE_RECOGNIZED', log });
+    } else {
+      broadcast({ type: 'RFID_SCANNED', log });
+    }
+
+    res.status(201).json({ success: true, log });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to record attendance' });
+  }
+});
+
+// Unknown Face Event Endpoint (can upload image)
+app.post('/api/device/unknown_face', verifyDeviceApiKey, upload.single('image'), async (req, res) => {
+  try {
+    const ts = new Date().toISOString();
+    let imagePath = null;
+    
+    if (req.file) {
+      imagePath = `/uploads/${req.file.filename}`;
+    }
+
+    await db.run('INSERT INTO unknown_faces (image_path, timestamp) VALUES (?, ?)', [imagePath, ts]);
+    const unknownLog = await db.get('SELECT * FROM unknown_faces WHERE id = last_insert_rowid()');
+    
+    // Broadcast unknown face alert
+    broadcast({ type: 'UNKNOWN_FACE', log: unknownLog });
+    
+    res.status(201).json({ success: true, log: unknownLog });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to record unknown face' });
+  }
+});
+
+// 11. Camera Stream Config Endpoint
+app.get('/api/camera/config', authenticateToken, async (req, res) => {
+  // Returns the expected stream URL. 
+  // In a real system this could be stored in 'devices' table.
+  res.json({
+    streamUrl: process.env.ESP32_STREAM_URL || 'http://192.168.1.100:81/stream'
+  });
+});
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Express REST & WS Server listening on port ${PORT}`);
