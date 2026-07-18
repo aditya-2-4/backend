@@ -163,68 +163,7 @@ export async function initDb() {
   // Seed biometrics if empty (Disabled to prevent fake data in production)
   // Seeding removed per user request
 
-  // Seed default detection zones if empty
-  const zoneCount = await db.get('SELECT COUNT(*) as count FROM zones');
-  if (zoneCount.count === 0) {
-    await db.run(`INSERT INTO zones (name, type, coordinates) VALUES (?, ?, ?)`, [
-      'North Pasture Gate',
-      'rectangle',
-      JSON.stringify({ x: 10, y: 15, width: 45, height: 40 })
-    ]);
-    await db.run(`INSERT INTO zones (name, type, coordinates) VALUES (?, ?, ?)`, [
-      'Main Barn Entrance',
-      'radius',
-      JSON.stringify({ x: 60, y: 50, radius: 25 })
-    ]);
-    console.log('Seeded detection zones');
-  }
 
-  // Seed default livestock if empty
-  const liveCount = await db.get('SELECT COUNT(*) as count FROM livestock');
-  if (liveCount.count === 0) {
-    await db.run(`INSERT INTO livestock (name, tag_id, status) VALUES (?, ?, ?)`, ['Cow-01 (Bessie)', 'LIV_COW_001', 'Safe']);
-    await db.run(`INSERT INTO livestock (name, tag_id, status) VALUES (?, ?, ?)`, ['Cow-02 (Bella)', 'LIV_COW_002', 'Safe']);
-    await db.run(`INSERT INTO livestock (name, tag_id, status) VALUES (?, ?, ?)`, ['Sheep-01 (Dolly)', 'LIV_SHP_001', 'Warning (Near boundary)']);
-    console.log('Seeded livestock');
-
-    // Seed location history for Bessie, Bella, and Dolly
-    // Base center of farm around Lat: 37.7749, Lng: -122.4194 (or standard rural coordinates e.g. 34.0522, -118.2437)
-    // Let's use coordinates near a farm: 38.3245, -122.6512 (Santa Rosa, CA farm region)
-    const baseCoords = { lat: 38.3245, lng: -122.6512 };
-    const nowTs = new Date();
-
-    // Bessie locations
-    for (let i = 5; i >= 0; i--) {
-      const ts = new Date(nowTs.getTime() - i * 600000).toISOString(); // every 10 min
-      await db.run(`INSERT INTO livestock_locations (livestock_id, timestamp, lat, lng) VALUES (?, ?, ?, ?)`, [
-        1, ts, baseCoords.lat + i * 0.0001, baseCoords.lng + i * 0.00015
-      ]);
-    }
-    // Bella locations
-    for (let i = 5; i >= 0; i--) {
-      const ts = new Date(nowTs.getTime() - i * 600000).toISOString();
-      await db.run(`INSERT INTO livestock_locations (livestock_id, timestamp, lat, lng) VALUES (?, ?, ?, ?)`, [
-        2, ts, baseCoords.lat - i * 0.00008, baseCoords.lng + i * 0.0002
-      ]);
-    }
-    // Dolly locations (which exited geofence)
-    // Geofence center: 38.3245, -122.6512, size/radius: ~300 meters (~0.0027 degrees latitude/longitude)
-    for (let i = 5; i >= 0; i--) {
-      const ts = new Date(nowTs.getTime() - i * 600000).toISOString();
-      // Increments outside geofence boundary (0.003 difference is outside boundary)
-      const latDiff = i * 0.0006;
-      await db.run(`INSERT INTO livestock_locations (livestock_id, timestamp, lat, lng) VALUES (?, ?, ?, ?)`, [
-        3, ts, baseCoords.lat + latDiff + 0.001, baseCoords.lng - i * 0.0004
-      ]);
-    }
-    console.log('Seeded livestock locations history');
-  }
-
-  // Seed events if empty (Disabled to prevent fake data in production)
-  // Seeding removed per user request
-
-  // Seed alerts if empty (Disabled to prevent fake data in production)
-  // Seeding removed per user request
 
   return db;
 }
