@@ -393,7 +393,7 @@ const verifyDeviceApiKey = (req, res, next) => {
 
 // Login Route
 let currentStreamUrl = null;
-let cameraReq = null;
+let abortController = null;
 
 function broadcastBinary(data) {
   wss.clients.forEach(client => {
@@ -403,46 +403,71 @@ function broadcastBinary(data) {
   });
 }
 
-function startCameraProxy(url) {
-  if (cameraReq) {
-    cameraReq.destroy();
-    cameraReq = null;
+async function startCameraProxy(url) {
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
   }
   
   currentStreamUrl = url;
   if (!url) return;
 
-  const httpModule = url.startsWith('https') ? https : http;
-  
+  abortController = new AbortController();
+
   try {
-    cameraReq = httpModule.get(url, { headers: { 'Bypass-Tunnel-Reminder': 'true' } }, (res) => {
-      let buffer = Buffer.alloc(0);
-      
-      res.on('data', (chunk) => {
-        buffer = Buffer.concat([buffer, chunk]);
-        
-        let start = buffer.indexOf(Buffer.from([0xff, 0xd8]));
-        let end = buffer.indexOf(Buffer.from([0xff, 0xd9]));
-        
-        if (start !== -1 && end !== -1 && end > start) {
-          end += 2; // Include FFD9
-          const frame = buffer.subarray(start, end);
-          broadcastBinary(frame);
-          buffer = buffer.subarray(end);
-        }
-      });
-      
-      res.on('end', () => {
-        setTimeout(() => startCameraProxy(currentStreamUrl), 5000);
-      });
+    const response = await fetch(url, {
+      headers: { 
+        'Bypass-Tunnel-Reminder': 'true',
+        'ngrok-skip-browser-warning': 'true'
+      },
+      signal: abortController.signal,
+      redirect: 'follow'
     });
-    
-    cameraReq.on('error', (err) => {
-      console.error('Camera stream proxy error:', err.message);
+
+    if (!response.ok) {
+      console.error(`Camera proxy HTTP error: ${response.status} ${response.statusText}`);
       setTimeout(() => startCameraProxy(currentStreamUrl), 5000);
-    });
+      return;
+    }
+
+    const reader = response.body.getReader();
+    let buffer = new Uint8Array(0);
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        console.log('Camera proxy stream ended.');
+        break;
+      }
+
+      let newBuffer = new Uint8Array(buffer.length + value.length);
+      newBuffer.set(buffer);
+      newBuffer.set(value, buffer.length);
+      buffer = newBuffer;
+
+      let start = -1;
+      let end = -1;
+      for (let i = 0; i < buffer.length - 1; i++) {
+        if (buffer[i] === 0xff && buffer[i+1] === 0xd8) start = i;
+        if (buffer[i] === 0xff && buffer[i+1] === 0xd9 && start !== -1) {
+          end = i + 2;
+          break;
+        }
+      }
+
+      if (start !== -1 && end !== -1 && end > start) {
+        const frame = buffer.slice(start, end);
+        broadcastBinary(frame);
+        buffer = buffer.slice(end);
+      }
+    }
+
+    setTimeout(() => startCameraProxy(currentStreamUrl), 5000);
   } catch (err) {
-    console.error('Failed to start camera proxy:', err);
+    if (err.name !== 'AbortError') {
+      console.error('Failed to start camera proxy:', err.message);
+      setTimeout(() => startCameraProxy(currentStreamUrl), 5000);
+    }
   }
 }
 
