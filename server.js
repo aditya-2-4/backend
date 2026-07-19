@@ -5,6 +5,8 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import { WebSocketServer } from 'ws';
+import http from 'http';
+import https from 'https';
 import { createServer } from 'http';
 import path from 'path';
 import fs from 'fs';
@@ -390,6 +392,67 @@ const verifyDeviceApiKey = (req, res, next) => {
 };
 
 // Login Route
+let currentStreamUrl = null;
+let cameraReq = null;
+
+function broadcastBinary(data) {
+  wss.clients.forEach(client => {
+    if (client.readyState === 1) { // WebSocket.OPEN
+      client.send(data);
+    }
+  });
+}
+
+function startCameraProxy(url) {
+  if (cameraReq) {
+    cameraReq.destroy();
+    cameraReq = null;
+  }
+  
+  currentStreamUrl = url;
+  if (!url) return;
+
+  const httpModule = url.startsWith('https') ? https : http;
+  
+  try {
+    cameraReq = httpModule.get(url, { headers: { 'Bypass-Tunnel-Reminder': 'true' } }, (res) => {
+      let buffer = Buffer.alloc(0);
+      
+      res.on('data', (chunk) => {
+        buffer = Buffer.concat([buffer, chunk]);
+        
+        let start = buffer.indexOf(Buffer.from([0xff, 0xd8]));
+        let end = buffer.indexOf(Buffer.from([0xff, 0xd9]));
+        
+        if (start !== -1 && end !== -1 && end > start) {
+          end += 2; // Include FFD9
+          const frame = buffer.subarray(start, end);
+          broadcastBinary(frame);
+          buffer = buffer.subarray(end);
+        }
+      });
+      
+      res.on('end', () => {
+        setTimeout(() => startCameraProxy(currentStreamUrl), 5000);
+      });
+    });
+    
+    cameraReq.on('error', (err) => {
+      console.error('Camera stream proxy error:', err.message);
+      setTimeout(() => startCameraProxy(currentStreamUrl), 5000);
+    });
+  } catch (err) {
+    console.error('Failed to start camera proxy:', err);
+  }
+}
+
+// Ensure proxy starts on boot
+db.get('SELECT stream_url FROM devices LIMIT 1').then(device => {
+  if (device && device.stream_url) {
+    startCameraProxy(device.stream_url);
+  }
+}).catch(err => console.error(err));
+
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body;
   
@@ -871,6 +934,9 @@ app.post('/api/device/stream-url', authenticateToken, async (req, res) => {
     
     const updatedDevice = await db.get('SELECT * FROM devices LIMIT 1');
     
+    // Restart proxy with new URL
+    startCameraProxy(stream_url);
+
     // Broadcast status change so other devices automatically update their stream view
     broadcast({
       type: 'STATUS_UPDATE',
