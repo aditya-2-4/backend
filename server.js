@@ -445,20 +445,30 @@ async function startCameraProxy(url) {
       newBuffer.set(value, buffer.length);
       buffer = newBuffer;
 
-      let start = -1;
-      let end = -1;
-      for (let i = 0; i < buffer.length - 1; i++) {
-        if (buffer[i] === 0xff && buffer[i+1] === 0xd8) start = i;
-        if (buffer[i] === 0xff && buffer[i+1] === 0xd9 && start !== -1) {
-          end = i + 2;
-          break;
+      // Extract ALL complete frames from the current buffer
+      while (true) {
+        let start = -1;
+        let end = -1;
+        
+        for (let i = 0; i < buffer.length - 1; i++) {
+          if (buffer[i] === 0xff && buffer[i+1] === 0xd8 && start === -1) start = i;
+          if (buffer[i] === 0xff && buffer[i+1] === 0xd9 && start !== -1) {
+            end = i + 2;
+            break;
+          }
         }
-      }
 
-      if (start !== -1 && end !== -1 && end > start) {
-        const frame = buffer.slice(start, end);
-        broadcastBinary(frame);
-        buffer = buffer.slice(end);
+        if (start !== -1 && end !== -1 && end > start) {
+          const frame = buffer.slice(start, end);
+          broadcastBinary(frame);
+          buffer = buffer.slice(end);
+        } else if (start === -1 && buffer.length > 0) {
+          // No start marker found. Discard junk data, keep last byte just in case it's 0xff
+          buffer = buffer.slice(buffer.length - 1);
+          break;
+        } else {
+          break; // Start found, but end not found yet. Wait for more data.
+        }
       }
     }
 
