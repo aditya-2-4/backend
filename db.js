@@ -34,9 +34,18 @@ export async function initDb() {
       is_armed INTEGER DEFAULT 0,
       battery_level INTEGER DEFAULT 100,
       signal_strength INTEGER DEFAULT 5, -- 0-5 stars
-      last_heartbeat TEXT
+      last_heartbeat TEXT,
+      stream_url TEXT
     )
   `);
+
+  // Migration for existing databases to add stream_url
+  try {
+    await db.exec('ALTER TABLE devices ADD COLUMN stream_url TEXT');
+    console.log('Migrated: Added stream_url column to devices table');
+  } catch (err) {
+    // Column already exists or table doesn't support it, ignore safely
+  }
 
   // Create Events table
   await db.exec(`

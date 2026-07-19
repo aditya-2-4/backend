@@ -861,6 +861,29 @@ app.post('/api/device/arm-toggle', authenticateToken, async (req, res) => {
   }
 });
 
+// Update Stream URL endpoint for web dashboard
+app.post('/api/device/stream-url', authenticateToken, async (req, res) => {
+  const { stream_url } = req.body;
+  if (stream_url === undefined) return res.status(400).json({ error: 'stream_url required' });
+
+  try {
+    await db.run('UPDATE devices SET stream_url = ?', [stream_url]);
+    
+    const updatedDevice = await db.get('SELECT * FROM devices LIMIT 1');
+    
+    // Broadcast status change so other devices automatically update their stream view
+    broadcast({
+      type: 'STATUS_UPDATE',
+      device: updatedDevice
+    });
+
+    res.json({ success: true, stream_url });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to update stream URL' });
+  }
+});
+
 // ==========================================
 // ESP32 SMART FACE RECOGNITION & RFID APIs
 // ==========================================
