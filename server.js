@@ -302,6 +302,7 @@ app.get('/api/health', async (req, res) => {
             font-weight: 700;
           }
           .green { color: #10b981; }
+          .red { color: #ef4444; }
           .btn {
             display: block;
             background-color: #2e854e;
@@ -323,12 +324,16 @@ app.get('/api/health', async (req, res) => {
         <div class="card">
           <div class="header">
             <h1 class="title">FarmGuard API</h1>
-            <div class="badge ${!isOnline ? 'offline' : ''}">
-              <span class="pulse ${!isOnline ? 'offline' : ''}"></span>
-              <span>${isOnline ? 'Online' : 'Offline'}</span>
+            <div class="badge">
+              <span class="pulse"></span>
+              <span>API ONLINE</span>
             </div>
           </div>
           <div class="grid">
+            <div class="item">
+              <span class="label">ESP32 Device</span>
+              <span class="value ${isOnline ? 'green' : 'red'}">${isOnline ? 'CONNECTED' : 'DISCONNECTED'}</span>
+            </div>
             <div class="item">
               <span class="label">Service Name</span>
               <span class="value">${healthData.service}</span>
@@ -340,10 +345,6 @@ app.get('/api/health', async (req, res) => {
             <div class="item">
               <span class="label">System Uptime</span>
               <span class="value">${formatUptime(healthData.uptime)}</span>
-            </div>
-            <div class="item">
-              <span class="label">Server Epoch</span>
-              <span class="value" style="font-size: 11px;">${healthData.timestamp}</span>
             </div>
           </div>
           <a href="${process.env.FRONTEND_URL || allowedOrigin || 'https://frontend-six-tau-93.vercel.app'}" class="btn">Open Main Dashboard</a>
