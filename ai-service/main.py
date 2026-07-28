@@ -23,7 +23,7 @@ latest_frame_bytes = None
 def get_model():
     global model
     if model is None:
-        logger.info("Loading YOLO model (yolo11n.pt)...")
+        logger.info("Initializing YOLO model (yolo11n.pt)...")
         try:
             model = YOLO("yolo11n.pt")
             logger.info("YOLO model loaded successfully.")
@@ -34,11 +34,11 @@ def get_model():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Try pre-loading model on startup gracefully
+    logger.info("Application starting up...")
     try:
         get_model()
     except Exception as e:
-        logger.warning(f"Startup model pre-load deferred: {e}")
+        logger.warning(f"Model initialization deferred to first request: {e}")
     yield
 
 app = FastAPI(title="FarmGuard AI Detection Service", lifespan=lifespan)
