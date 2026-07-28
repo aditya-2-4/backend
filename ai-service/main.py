@@ -1,5 +1,4 @@
 import os
-import io
 import logging
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
@@ -15,8 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai-service")
 
 SHARED_API_KEY = os.getenv("SHARED_API_KEY", "secure_esp32_device_shared_api_key_2026")
-MAIN_PORT = os.getenv("MAIN_PORT", "5000")
-BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", f"http://127.0.0.1:{MAIN_PORT}/api/device/event")
+BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "https://backend-8-yt04.onrender.com/api/device/event")
 
 # Global in-memory storage for YOLO model and latest annotated frame
 model = None
@@ -26,23 +24,13 @@ latest_frame_bytes = None
 async def lifespan(app: FastAPI):
     global model
     logger.info("Loading YOLO model (yolo11n.pt)...")
-    # Load model once at startup
     model = YOLO("yolo11n.pt")
     logger.info("YOLO model loaded successfully.")
     yield
 
 app = FastAPI(title="FarmGuard AI Detection Service", lifespan=lifespan)
 
-# Detection thresholds & label mappings
-CONFIDENCE_THRESHOLDS = {
-    "person": 0.55,
-    "cow": 0.55,
-    "dog": 0.55,
-    "cat": 0.55,
-    "horse": 0.55,
-    "sheep": 0.55,
-}
-DEFAULT_THRESHOLD = 0.50
+HIGH_CONFIDENCE_CLASSES = {"person", "cow", "dog", "cat", "horse", "sheep", "Human", "Cow / Cattle"}
 
 LABEL_MAPPINGS = {
     "person": "Human",
@@ -51,17 +39,13 @@ LABEL_MAPPINGS = {
 
 @app.get("/")
 def health_check():
-    return {
-        "status": "healthy",
-        "service": "FarmGuard AI Detection Service",
-        "model": "yolo11n.pt"
-    }
+    return {"status": "ok"}
 
 @app.get("/latest-frame")
 def get_latest_frame():
     global latest_frame_bytes
     if latest_frame_bytes is None:
-        raise HTTPException(status_code=404, detail="No frame has been captured yet")
+        raise HTTPException(status_code=404, detail="No frame received yet")
     return Response(content=latest_frame_bytes, media_type="image/jpeg")
 
 @app.post("/detect")
@@ -72,11 +56,11 @@ async def detect_objects(
     global model, latest_frame_bytes
 
     if not x_api_key or x_api_key != SHARED_API_KEY:
-        raise HTTPException(status_code=403, detail="Unauthorized device key access")
+        raise HTTPException(status_code=401, detail="Unauthorized device key access")
 
     raw_body = await request.body()
     if not raw_body:
-        raise HTTPException(status_code=400, detail="Empty request body")
+        raise HTTPException(status_code=400, detail="Empty image body")
 
     # Decode raw JPEG bytes into OpenCV image matrix
     np_arr = np.frombuffer(raw_body, np.uint8)
@@ -96,7 +80,6 @@ async def detect_objects(
 
     if len(results) > 0:
         result = results[0]
-        # Get annotated image with bounding boxes drawn by YOLO
         annotated_img = result.plot()
 
         boxes = result.boxes
@@ -106,20 +89,16 @@ async def detect_objects(
                 confidence = float(box.conf[0].item())
                 raw_class_name = result.names.get(cls_id, str(cls_id)).lower()
 
-                threshold = CONFIDENCE_THRESHOLDS.get(raw_class_name, DEFAULT_THRESHOLD)
+                label = LABEL_MAPPINGS.get(raw_class_name, raw_class_name)
+                threshold = 0.55 if (raw_class_name in HIGH_CONFIDENCE_CLASSES or label in HIGH_CONFIDENCE_CLASSES) else 0.50
 
                 if confidence >= threshold:
-                    label = LABEL_MAPPINGS.get(raw_class_name, raw_class_name)
-
-                    detection_item = {
-                        "class": raw_class_name,
+                    detections.append({
                         "label": label,
-                        "confidence": round(confidence, 4),
-                        "box": [round(x, 2) for x in box.xyxy[0].tolist()]
-                    }
-                    detections.append(detection_item)
+                        "confidence": round(confidence, 4)
+                    })
 
-                    # Post event to backend API endpoint
+                    # Dispatch event to Node.js backend
                     iso_timestamp = datetime.now(timezone.utc).isoformat()
                     event_payload = {
                         "detection_type": label,
@@ -133,7 +112,7 @@ async def detect_objects(
                             headers={"x-api-key": SHARED_API_KEY},
                             timeout=5
                         )
-                        logger.info(f"Forwarded detection event '{label}' to backend: status {resp.status_code}")
+                        logger.info(f"Dispatched event '{label}' to backend, status: {resp.status_code}")
                     except Exception as e:
                         logger.error(f"Failed to post detection event to backend: {e}")
 
@@ -142,8 +121,4 @@ async def detect_objects(
     if success:
         latest_frame_bytes = encoded_img.tobytes()
 
-    return JSONResponse(content={
-        "status": "success",
-        "detections": detections,
-        "count": len(detections)
-    })
+    return JSONResponse(content={"detections": detections})
