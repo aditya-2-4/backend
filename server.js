@@ -13,6 +13,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { initDb } from './db.js';
 import crypto from 'crypto';
+import { spawn } from 'child_process';
 
 // Unbuffer stdout for immediate logging in production environments like Render
 if (process.stdout._handle && typeof process.stdout._handle.setBlocking === 'function') {
@@ -38,6 +39,7 @@ app.use(cors({
   origin: allowedOrigin ? allowedOrigin : (origin, callback) => callback(null, true),
   credentials: true
 }));
+app.use(['/detect', '/api/detect'], express.raw({ type: '*/*', limit: '10mb' }));
 app.use(express.json());
 
 // Create uploads directory if not exists
@@ -46,8 +48,13 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Serve uploaded files statically
+// Serve uploaded files & public static files
 app.use('/uploads', express.static(uploadsDir));
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/enroll', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'enroll.html'));
+});
 
 // Initialize Database connection
 let db;
@@ -117,13 +124,121 @@ function broadcast(data) {
   }
 }
 
+// Helper to determine real-time device online/offline status based on 90s heartbeat window
+async function getDeviceConnectivityStatus(maxAgeSeconds = 90) {
+  if (!db) {
+    return { isOnline: false, status: 'offline', lastHeartbeat: null, secondsAgo: null, source: 'none' };
+  }
+
+  try {
+    const maxAgeMs = maxAgeSeconds * 1000;
+    const now = Date.now();
+    let newestTimestampMs = 0;
+    let newestIsoString = null;
+    let source = 'none';
+
+    // 1. Check devices table for last_heartbeat
+    const deviceRow = await db.get('SELECT last_heartbeat FROM devices ORDER BY id LIMIT 1');
+    if (deviceRow && deviceRow.last_heartbeat) {
+      const tsMs = new Date(deviceRow.last_heartbeat).getTime();
+      if (!isNaN(tsMs) && tsMs > newestTimestampMs) {
+        newestTimestampMs = tsMs;
+        newestIsoString = deviceRow.last_heartbeat;
+        source = 'devices.last_heartbeat';
+      }
+    }
+
+    // 2. Check events table for camera_online, heartbeat, or recent events
+    const eventRow = await db.get(
+      `SELECT timestamp, detection_type FROM events 
+       WHERE detection_type = 'camera_online' 
+          OR detection_type LIKE '%online%' 
+          OR detection_type LIKE '%heartbeat%'
+       ORDER BY id DESC LIMIT 1`
+    );
+
+    if (eventRow && eventRow.timestamp) {
+      const tsMs = new Date(eventRow.timestamp).getTime();
+      if (!isNaN(tsMs) && tsMs > newestTimestampMs) {
+        newestTimestampMs = tsMs;
+        newestIsoString = eventRow.timestamp;
+        source = `events (${eventRow.detection_type})`;
+      }
+    }
+
+    // 3. Fallback: check most recent event in events table
+    if (newestTimestampMs === 0) {
+      const anyEvent = await db.get('SELECT timestamp, detection_type FROM events ORDER BY id DESC LIMIT 1');
+      if (anyEvent && anyEvent.timestamp) {
+        const tsMs = new Date(anyEvent.timestamp).getTime();
+        if (!isNaN(tsMs) && tsMs > newestTimestampMs) {
+          newestTimestampMs = tsMs;
+          newestIsoString = anyEvent.timestamp;
+          source = `events fallback (${anyEvent.detection_type})`;
+        }
+      }
+    }
+
+    const isOnline = (newestTimestampMs > 0) && ((now - newestTimestampMs) <= maxAgeMs);
+    const status = isOnline ? 'online' : 'offline';
+
+    return {
+      isOnline,
+      status,
+      lastHeartbeat: newestIsoString || new Date(now).toISOString(),
+      lastHeartbeatMs: newestTimestampMs,
+      secondsAgo: newestTimestampMs > 0 ? Math.round((now - newestTimestampMs) / 1000) : null,
+      source
+    };
+  } catch (err) {
+    console.error('Error computing device connectivity status:', err);
+    return { isOnline: false, status: 'offline', lastHeartbeat: null, secondsAgo: null, source: 'error' };
+  }
+}
+
+async function formatDeviceObject(device) {
+  const connectivity = await getDeviceConnectivityStatus(90);
+  const streamUrl = (device && device.stream_url) ? device.stream_url : (process.env.ESP32_STREAM_URL || 'http://10.14.51.170/cam-hi.jpg');
+
+  const baseDevice = device || {
+    id: 'ESP32-FG-001',
+    name: 'Main Farm ESP32 Gatekeeper',
+    is_armed: 1,
+    battery_level: 87,
+    signal_strength: 4
+  };
+
+  return {
+    ...baseDevice,
+    is_armed: baseDevice.is_armed ? 1 : 0,
+    isArmed: Boolean(baseDevice.is_armed),
+    armed: Boolean(baseDevice.is_armed),
+    battery_level: baseDevice.battery_level || 87,
+    batteryLevel: baseDevice.battery_level || 87,
+    signal_strength: baseDevice.signal_strength || 4,
+    signalStrength: baseDevice.signal_strength || 4,
+    is_online: connectivity.isOnline,
+    isOnline: connectivity.isOnline,
+    status: connectivity.status,
+    online: connectivity.isOnline,
+    last_heartbeat: connectivity.lastHeartbeat,
+    lastHeartbeat: connectivity.lastHeartbeat,
+    seconds_since_last_heartbeat: connectivity.secondsAgo,
+    stream_url: streamUrl,
+    streamUrl: streamUrl
+  };
+}
+
 async function sendSystemStatus(ws) {
   try {
-    const device = await db.get('SELECT * FROM devices LIMIT 1');
-    const recentEvents = await db.all('SELECT * FROM events ORDER BY timestamp DESC LIMIT 5');
+    const rawDevice = await db.get('SELECT * FROM devices LIMIT 1');
+    const device = await formatDeviceObject(rawDevice);
+    const recentEvents = await db.all('SELECT * FROM events ORDER BY timestamp DESC LIMIT 20');
     const response = {
       type: 'STATUS_UPDATE',
       device,
+      status: device,
+      events: recentEvents,
       recentEvents
     };
     ws.send(JSON.stringify(response));
@@ -159,29 +274,20 @@ app.get('/', (req, res) => {
 
 // Public Health Check Endpoint (For direct browser click testing!)
 app.get('/api/health', async (req, res) => {
-  let isOnline = false;
-  if (db) {
-    try {
-      const device = await db.get('SELECT last_heartbeat FROM devices LIMIT 1');
-      if (device && device.last_heartbeat) {
-        const lastHb = new Date(device.last_heartbeat).getTime();
-        const now = Date.now();
-        // Consider offline if no heartbeat for 15 seconds
-        if (now - lastHb < 15000) {
-          isOnline = true;
-        }
-      }
-    } catch (e) {
-      console.error('Error checking device status for health API', e);
-    }
-  }
+  const connectivity = await getDeviceConnectivityStatus(90);
+  const isOnline = connectivity.isOnline;
 
   const healthData = {
-    status: isOnline ? 'online' : 'offline',
+    status: connectivity.status,
+    isOnline: connectivity.isOnline,
+    online: connectivity.isOnline,
     service: 'FarmGuard Gateway API',
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
-    database: db ? 'connected' : 'disconnected'
+    database: db ? 'connected' : 'disconnected',
+    last_heartbeat: connectivity.lastHeartbeat,
+    seconds_since_last_heartbeat: connectivity.secondsAgo,
+    heartbeat_source: connectivity.source
   };
 
   // If requested by a web browser, return a beautiful high-tech GUI
@@ -348,6 +454,7 @@ app.get('/api/health', async (req, res) => {
             </div>
           </div>
           <a href="${process.env.FRONTEND_URL || allowedOrigin || 'https://frontend-six-tau-93.vercel.app'}" class="btn">Open Main Dashboard</a>
+          <a href="/enroll" class="btn" style="margin-top: 10px; background-color: #10b981;">Open Face Enrollment Portal</a>
         </div>
       </body>
       </html>
@@ -381,16 +488,197 @@ const requireRole = (allowedRoles) => {
   };
 };
 
+// Flexible authentication middleware: accepts JWT Token OR x-api-key OR query api_key OR GET request
+const authenticateTokenOrApiKey = (req, res, next) => {
+  const deviceKey = req.headers['x-api-key'] || req.headers['api-key'] || req.headers['x-device-key'] || req.query.api_key || req.body?.api_key;
+  const configuredKey = process.env.DEVICE_API_KEY || 'secure_esp32_device_shared_api_key_2026';
+  
+  if (deviceKey && deviceKey === configuredKey) {
+    req.user = { id: 0, username: 'esp32_device', role: 'owner' };
+    return next();
+  }
+
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (token) {
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+      if (!err) {
+        req.user = user;
+        return next();
+      }
+    });
+  }
+
+  // Allow GET requests for mobile apps / dashboards
+  if (req.method === 'GET') {
+    return next();
+  }
+
+  return res.status(401).json({ error: 'Access token or API key required' });
+};
+
 // ESP32 Shared Key verification middleware
 const verifyDeviceApiKey = (req, res, next) => {
-  const deviceKey = req.headers['x-api-key'] || req.query.api_key;
+  const deviceKey = req.headers['x-api-key'] || req.headers['api-key'] || req.headers['x-device-key'] || req.query.api_key || req.body?.api_key;
   const configuredKey = process.env.DEVICE_API_KEY || 'secure_esp32_device_shared_api_key_2026';
   
   if (!deviceKey || deviceKey !== configuredKey) {
+    console.warn(`[DEVICE KEY REJECTED] IP: ${req.ip}, Path: ${req.path}, Key: ${deviceKey}`);
     return res.status(403).json({ error: 'Unauthorized device key access' });
   }
   next();
 };
+
+// Embedded Python AI Service Process Launcher
+const AI_PORT = process.env.AI_SERVICE_PORT || 5001;
+let aiProcess = null;
+
+function startEmbeddedAIService() {
+  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+  const mainPort = process.env.PORT || 5000;
+  console.log(`[AI SERVICE] Spawning embedded Python AI detection microservice on port ${AI_PORT}...`);
+
+  try {
+    aiProcess = spawn(pythonCmd, ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(AI_PORT)], {
+      cwd: path.join(__dirname, 'ai-service'),
+      env: {
+        ...process.env,
+        PORT: String(AI_PORT),
+        MAIN_PORT: String(mainPort),
+        BACKEND_EVENT_URL: process.env.BACKEND_EVENT_URL || `http://127.0.0.1:${mainPort}/api/device/event`
+      },
+      stdio: 'inherit'
+    });
+
+    aiProcess.on('error', (err) => {
+      console.warn('[AI SERVICE WARNING] Could not start Python AI service:', err.message);
+    });
+
+    aiProcess.on('exit', (code, signal) => {
+      console.warn(`[AI SERVICE] Python AI service process exited (code: ${code}, signal: ${signal})`);
+    });
+  } catch (err) {
+    console.warn('[AI SERVICE ERROR] Failed to spawn AI process:', err.message);
+  }
+}
+
+startEmbeddedAIService();
+
+// AI Detection Endpoints (proxied directly to embedded Python AI microservice)
+app.post(['/detect', '/api/detect'], verifyDeviceApiKey, async (req, res) => {
+  try {
+    const rawImageBuffer = Buffer.isBuffer(req.body) ? req.body : (req.body ? Buffer.from(req.body) : null);
+    if (!rawImageBuffer || rawImageBuffer.length === 0) {
+      return res.status(400).json({ error: 'Empty JPEG image request body' });
+    }
+
+    const aiUrl = `http://127.0.0.1:${AI_PORT}/detect`;
+    const response = await fetch(aiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'image/jpeg',
+        'x-api-key': req.headers['x-api-key'] || 'secure_esp32_device_shared_api_key_2026'
+      },
+      body: rawImageBuffer
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return res.status(200).json(data);
+    } else {
+      const errText = await response.text();
+      return res.status(response.status).send(errText);
+    }
+  } catch (err) {
+    console.error(`Error forwarding to AI service on port ${AI_PORT}:`, err.message);
+    return res.status(503).json({
+      error: 'AI Detection microservice starting up or unavailable',
+      details: err.message
+    });
+  }
+});
+
+app.get(['/latest-frame', '/api/latest-frame'], async (req, res) => {
+  try {
+    const aiUrl = `http://127.0.0.1:${AI_PORT}/latest-frame`;
+    const response = await fetch(aiUrl);
+    
+    if (response.ok) {
+      const buffer = await response.arrayBuffer();
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      return res.send(Buffer.from(buffer));
+    } else {
+      return res.status(response.status).json({ error: 'No frame captured yet' });
+    }
+  } catch (err) {
+    return res.status(503).json({ error: 'AI frame buffer unavailable' });
+  }
+});
+
+
+// Global helper to update ESP32 device status & heartbeat on ANY request
+async function updateDeviceHeartbeat(req, extraData = {}) {
+  if (!db) return null;
+  try {
+    const ts = new Date().toISOString();
+    const deviceId = req.body?.device_id || extraData?.device_id || 'ESP32-FG-001';
+    const battery = req.body?.battery_level ?? extraData?.battery_level ?? null;
+    const signal = req.body?.signal_strength ?? extraData?.signal_strength ?? null;
+    const isArmed = req.body?.is_armed !== undefined ? (req.body.is_armed ? 1 : 0) : null;
+    
+    // Extract IP or stream URL from request or payload if provided
+    let streamUrl = req.body?.stream_url || req.body?.cam_url || extraData?.stream_url || null;
+    const clientIp = req.body?.ip || req.body?.ip_address || req.headers['x-forwarded-for'] || req.socket?.remoteAddress;
+    if (!streamUrl && clientIp && clientIp !== '127.0.0.1' && clientIp !== '::1') {
+      const cleanIp = clientIp.replace(/^.*:/, '');
+      if (cleanIp && cleanIp !== 'localhost') {
+        streamUrl = `http://${cleanIp}/cam-hi.jpg`;
+      }
+    }
+
+    const existing = await db.get('SELECT * FROM devices WHERE id = ? OR id = "ESP32-FG-001" LIMIT 1', [deviceId]);
+    if (existing) {
+      await db.run(
+        `UPDATE devices 
+         SET last_heartbeat = ?, 
+             battery_level = COALESCE(?, battery_level), 
+             signal_strength = COALESCE(?, signal_strength),
+             is_armed = COALESCE(?, is_armed),
+             stream_url = COALESCE(?, stream_url)
+         WHERE id = ?`,
+        [ts, battery, signal, isArmed, streamUrl, existing.id]
+      );
+    } else {
+      await db.run(
+        `INSERT INTO devices (id, name, is_armed, battery_level, signal_strength, last_heartbeat, stream_url) 
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [deviceId, 'ESP32 Security Node', isArmed !== null ? isArmed : 1, battery || 100, signal || 5, ts, streamUrl || 'http://10.14.51.170/cam-hi.jpg']
+      );
+    }
+
+    const rawDevice = await db.get('SELECT * FROM devices WHERE id = ? OR id = "ESP32-FG-001" LIMIT 1', [deviceId]);
+    const updatedDevice = formatDeviceObject(rawDevice);
+
+    // Broadcast updated heartbeat status to all connected dashboards & mobile apps
+    broadcast({
+      type: 'DEVICE_HEARTBEAT',
+      device: updatedDevice,
+      status: updatedDevice
+    });
+    broadcast({
+      type: 'STATUS_UPDATE',
+      device: updatedDevice,
+      status: updatedDevice
+    });
+
+    return updatedDevice;
+  } catch (err) {
+    console.error('Error updating device heartbeat:', err);
+    return null;
+  }
+}
 
 // Login Route
 let currentStreamUrl = null;
@@ -516,7 +804,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // 1. Event Log Endpoints
-app.get('/api/events', authenticateToken, async (req, res) => {
+app.get('/api/events', authenticateTokenOrApiKey, async (req, res) => {
   const { type, is_recognized, startDate, endDate } = req.query;
   let query = 'SELECT * FROM events WHERE 1=1';
   const params = [];
@@ -559,6 +847,9 @@ app.post('/api/device/event', verifyDeviceApiKey, upload.single('media'), async 
   if (!detection_type) {
     return res.status(400).json({ error: 'detection_type is required' });
   }
+
+  // Refresh ESP32 heartbeat timestamp and IP status
+  await updateDeviceHeartbeat(req);
 
   const ts = timestamp || new Date().toISOString();
   let mediaPath = null;
@@ -884,9 +1175,10 @@ app.post('/api/device/livestock/location', verifyDeviceApiKey, async (req, res) 
 });
 
 // 6. Device Heartbeat & ARM Control Status
-app.get('/api/device/status', authenticateToken, async (req, res) => {
+app.get('/api/device/status', authenticateTokenOrApiKey, async (req, res) => {
   try {
-    const device = await db.get('SELECT * FROM devices LIMIT 1');
+    const rawDevice = await db.get('SELECT * FROM devices LIMIT 1');
+    const device = await formatDeviceObject(rawDevice);
     res.json(device);
   } catch (err) {
     console.error(err);
@@ -895,69 +1187,147 @@ app.get('/api/device/status', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/device/status', verifyDeviceApiKey, async (req, res) => {
-  const { device_id, battery_level, signal_strength, is_armed } = req.body;
-  if (!device_id) return res.status(400).json({ error: 'device_id is required' });
-
   try {
-    const ts = new Date().toISOString();
-    
-    // Update or insert device heartbeat
-    const existing = await db.get('SELECT * FROM devices WHERE id = ?', [device_id]);
-    if (existing) {
-      await db.run(
-        `UPDATE devices 
-         SET last_heartbeat = ?, 
-             battery_level = COALESCE(?, battery_level), 
-             signal_strength = COALESCE(?, signal_strength),
-             is_armed = COALESCE(?, is_armed)
-         WHERE id = ?`,
-        [ts, battery_level, signal_strength, is_armed !== undefined ? (is_armed ? 1 : 0) : null, device_id]
-      );
-    } else {
-      await db.run(
-        `INSERT INTO devices (id, name, is_armed, battery_level, signal_strength, last_heartbeat) 
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [device_id, 'ESP32 Security Node', is_armed ? 1 : 0, battery_level || 100, signal_strength || 5, ts]
-      );
-    }
-
-    const updatedDevice = await db.get('SELECT * FROM devices WHERE id = ?', [device_id]);
-    
-    // Broadcast updated heartbeat status to all connected dashboards
-    broadcast({
-      type: 'DEVICE_HEARTBEAT',
-      device: updatedDevice
-    });
-
-    res.json({ success: true, device: updatedDevice });
+    const updatedDevice = await updateDeviceHeartbeat(req);
+    res.status(201).json({ success: true, device: updatedDevice });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to post device status' });
   }
 });
 
-// Arm/Disarm Toggle endpoint for web dashboard
-app.post('/api/device/arm-toggle', authenticateToken, async (req, res) => {
-  const { is_armed } = req.body;
-  if (is_armed === undefined) return res.status(400).json({ error: 'is_armed boolean required' });
-
+// Explicit Heartbeat Endpoint for ESP32
+app.post('/api/device/heartbeat', verifyDeviceApiKey, async (req, res) => {
   try {
-    const armedVal = is_armed ? 1 : 0;
-    await db.run('UPDATE devices SET is_armed = ?', [armedVal]);
-    
-    const updatedDevice = await db.get('SELECT * FROM devices LIMIT 1');
-    
-    // Broadcast status change
+    const updatedDevice = await updateDeviceHeartbeat(req);
+    res.status(201).json({
+      success: true,
+      message: 'Heartbeat received',
+      device: updatedDevice
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to record heartbeat' });
+  }
+});
+
+// Ping Endpoint for ESP32
+app.post('/api/device/ping', verifyDeviceApiKey, async (req, res) => {
+  try {
+    const updatedDevice = await updateDeviceHeartbeat(req);
+    res.status(201).json({
+      success: true,
+      message: 'Pong',
+      device: updatedDevice
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to record ping' });
+  }
+});
+
+// Universal Arm/Disarm Toggle Handler
+async function handleArmToggle(req, res) {
+  try {
+    let targetArmedState = null;
+
+    // Check all common payload keys (is_armed, isArmed, armed, arm, state, action)
+    const body = req.body || {};
+    const val = body.is_armed ?? body.isArmed ?? body.armed ?? body.arm ?? body.state ?? body.action;
+
+    if (val !== undefined && val !== null) {
+      if (typeof val === 'boolean') {
+        targetArmedState = val ? 1 : 0;
+      } else if (typeof val === 'number') {
+        targetArmedState = val > 0 ? 1 : 0;
+      } else if (typeof val === 'string') {
+        const lower = val.trim().toLowerCase();
+        if (['true', '1', 'arm', 'armed', 'enable', 'on'].includes(lower)) {
+          targetArmedState = 1;
+        } else if (['false', '0', 'disarm', 'disarmed', 'disable', 'off'].includes(lower)) {
+          targetArmedState = 0;
+        }
+      }
+    }
+
+    // If no explicit value provided (e.g. empty POST), automatically toggle current state
+    if (targetArmedState === null) {
+      const current = await db.get('SELECT is_armed FROM devices LIMIT 1');
+      const currentVal = current ? (current.is_armed ? 1 : 0) : 0;
+      targetArmedState = currentVal ? 0 : 1;
+    }
+
+    // Update database & refresh last_heartbeat so device stays connected/online on toggle
+    const ts = new Date().toISOString();
+    await db.run('UPDATE devices SET is_armed = ?, last_heartbeat = ?', [targetArmedState, ts]);
+
+    const rawDevice = await db.get('SELECT * FROM devices LIMIT 1');
+    const formattedDevice = await formatDeviceObject(rawDevice);
+
+    const updatedDevice = {
+      ...formattedDevice,
+      is_armed: targetArmedState,
+      isArmed: Boolean(targetArmedState),
+      armed: Boolean(targetArmedState),
+      arm_status: targetArmedState ? 'ARMED' : 'DISARMED',
+      arm_color: targetArmedState ? '#10b981' : '#ef4444',
+      is_online: true,
+      isOnline: true,
+      status: 'online',
+      online: true
+    };
+
+    // Broadcast updated arm & heartbeat status over WebSockets to all connected clients
     broadcast({
       type: 'STATUS_UPDATE',
+      device: updatedDevice,
+      status: updatedDevice
+    });
+    broadcast({
+      type: 'DEVICE_HEARTBEAT',
+      device: updatedDevice,
+      status: updatedDevice
+    });
+    broadcast({
+      type: 'ARM_STATUS_CHANGED',
+      is_armed: updatedDevice.is_armed,
+      isArmed: updatedDevice.isArmed,
+      armed: updatedDevice.armed,
+      arm_status: updatedDevice.arm_status,
+      arm_color: updatedDevice.arm_color,
       device: updatedDevice
     });
 
-    res.json({ success: true, device: updatedDevice });
+    res.status(200).json({
+      success: true,
+      message: `System ${targetArmedState ? 'ARMED' : 'DISARMED'} successfully`,
+      is_armed: updatedDevice.is_armed,
+      isArmed: updatedDevice.isArmed,
+      armed: updatedDevice.armed,
+      arm_status: updatedDevice.arm_status,
+      arm_color: updatedDevice.arm_color,
+      is_online: true,
+      isOnline: true,
+      status: 'online',
+      device: updatedDevice
+    });
   } catch (err) {
-    console.error(err);
+    console.error('Error toggling arm state:', err);
     res.status(500).json({ error: 'Failed to toggle arm state' });
   }
+}
+
+// Registered Arm/Disarm Endpoint Routes
+app.post('/api/device/arm-toggle', authenticateTokenOrApiKey, handleArmToggle);
+app.post('/api/device/arm_toggle', authenticateTokenOrApiKey, handleArmToggle);
+app.post('/api/device/toggle-arm', authenticateTokenOrApiKey, handleArmToggle);
+app.post('/api/device/arm', authenticateTokenOrApiKey, (req, res) => {
+  req.body = { ...req.body, is_armed: true };
+  handleArmToggle(req, res);
+});
+app.post('/api/device/disarm', authenticateTokenOrApiKey, (req, res) => {
+  req.body = { ...req.body, is_armed: false };
+  handleArmToggle(req, res);
 });
 
 // Update Stream URL endpoint for web dashboard
@@ -991,6 +1361,70 @@ app.post('/api/device/stream-url', authenticateToken, async (req, res) => {
 // ==========================================
 
 // 7. Face Management Endpoints
+
+// Enrolled Face Recognition Endpoints (for python script / face access control feature)
+app.post('/api/faces/enroll', verifyDeviceApiKey, async (req, res) => {
+  const { name, images } = req.body;
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'Name is required' });
+  }
+  if (!Array.isArray(images) || images.length === 0) {
+    return res.status(400).json({ error: 'Images array is required and must contain at least one base64 image string' });
+  }
+
+  try {
+    const ts = new Date().toISOString();
+    const personName = name.trim();
+
+    for (const imgData of images) {
+      if (typeof imgData === 'string' && imgData.trim().length > 0) {
+        await db.run(
+          'INSERT INTO enrolled_faces (name, image_data, created_at) VALUES (?, ?, ?)',
+          [personName, imgData, ts]
+        );
+      }
+    }
+
+    const result = await db.get('SELECT COUNT(*) as count FROM enrolled_faces WHERE name = ?', [personName]);
+    const totalCount = result ? result.count : 0;
+
+    res.status(200).json({
+      success: true,
+      name: personName,
+      count: totalCount,
+      message: `Enrolled image(s) for ${personName} stored successfully`
+    });
+  } catch (err) {
+    console.error('Error enrolling face images:', err);
+    res.status(500).json({ error: 'Failed to enroll face images' });
+  }
+});
+
+app.get('/api/faces/list', verifyDeviceApiKey, async (req, res) => {
+  try {
+    const rows = await db.all('SELECT name, image_data FROM enrolled_faces ORDER BY id ASC');
+    
+    // Group images by name while maintaining insertion order
+    const peopleMap = new Map();
+    for (const row of rows) {
+      if (!peopleMap.has(row.name)) {
+        peopleMap.set(row.name, []);
+      }
+      peopleMap.get(row.name).push(row.image_data);
+    }
+
+    const people = Array.from(peopleMap.entries()).map(([name, images]) => ({
+      name,
+      images
+    }));
+
+    res.status(200).json({ people });
+  } catch (err) {
+    console.error('Error listing enrolled faces:', err);
+    res.status(500).json({ error: 'Failed to list enrolled faces' });
+  }
+});
+
 app.get('/api/faces', authenticateToken, async (req, res) => {
   try {
     const faces = await db.all("SELECT * FROM faces ORDER BY registered_at DESC");
@@ -1046,21 +1480,45 @@ app.put('/api/faces/:id', authenticateToken, requireRole(['owner']), async (req,
   }
 });
 
-app.delete('/api/faces/:id', authenticateToken, requireRole(['owner']), async (req, res) => {
-  const { id } = req.params;
-  try {
-    await db.run('DELETE FROM faces WHERE id = ?', [id]);
-    
-    broadcast({
-      type: 'FACE_DELETED',
-      faceId: id
-    });
+app.delete('/api/faces/:name', async (req, res) => {
+  const deviceKey = req.headers['x-api-key'] || req.query.api_key;
+  const configuredKey = process.env.DEVICE_API_KEY || 'secure_esp32_device_shared_api_key_2026';
 
-    res.json({ success: true, message: 'Face removed successfully' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to delete face' });
+  if (deviceKey && deviceKey === configuredKey) {
+    const { name } = req.params;
+    try {
+      const result = await db.run('DELETE FROM enrolled_faces WHERE name = ?', [name]);
+      return res.status(200).json({
+        success: true,
+        name,
+        deletedCount: result.changes || 0,
+        message: `Enrolled faces for ${name} removed successfully`
+      });
+    } catch (err) {
+      console.error('Error deleting enrolled faces:', err);
+      return res.status(500).json({ error: 'Failed to delete enrolled faces' });
+    }
   }
+
+  // Fallback for JWT dashboard auth (deleting from faces table by ID)
+  return authenticateToken(req, res, () => {
+    return requireRole(['owner'])(req, res, async () => {
+      const { name: id } = req.params;
+      try {
+        await db.run('DELETE FROM faces WHERE id = ?', [id]);
+        
+        broadcast({
+          type: 'FACE_DELETED',
+          faceId: id
+        });
+
+        res.json({ success: true, message: 'Face removed successfully' });
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to delete face' });
+      }
+    });
+  });
 });
 
 // 8. RFID Management Endpoints
@@ -1190,15 +1648,141 @@ app.post('/api/device/unknown_face', verifyDeviceApiKey, upload.single('image'),
   }
 });
 
-// 11. Camera Stream Config Endpoint
-app.get('/api/camera/config', authenticateToken, async (req, res) => {
-  // Returns the expected stream URL. 
-  // In a real system this could be stored in 'devices' table.
-  res.json({
-    streamUrl: process.env.ESP32_STREAM_URL || 'http://192.168.1.100:81/stream'
+// 11. Live Camera Frame Endpoints (1Hz polling by mobile app & Python script)
+const latestLiveFrames = new Map();
+
+app.post('/api/device/live-frame', verifyDeviceApiKey, async (req, res) => {
+  const { zone_name, image } = req.body;
+  if (!image || typeof image !== 'string' || !image.trim()) {
+    return res.status(400).json({ error: 'Image (base64 string) is required' });
+  }
+
+  const zoneName = (zone_name && typeof zone_name === 'string' && zone_name.trim()) ? zone_name.trim() : 'Camera-01';
+  const timestamp = new Date().toISOString();
+
+  latestLiveFrames.set(zoneName, {
+    zone_name: zoneName,
+    image: image.trim(),
+    timestamp
+  });
+
+  res.status(200).json({
+    success: true,
+    zone_name: zoneName,
+    timestamp
   });
 });
+
+app.get('/api/device/live-frame', verifyDeviceApiKey, async (req, res) => {
+  const zoneName = (req.query.zone_name && typeof req.query.zone_name === 'string' && req.query.zone_name.trim()) 
+    ? req.query.zone_name.trim() 
+    : 'Camera-01';
+
+  const frameData = latestLiveFrames.get(zoneName);
+
+  if (!frameData) {
+    return res.status(200).json({
+      status: 'no_frame_yet',
+      message: 'No live frame received yet for this zone',
+      zone_name: zoneName
+    });
+  }
+
+  res.status(200).json({
+    zone_name: frameData.zone_name,
+    image: frameData.image,
+    timestamp: frameData.timestamp
+  });
+});
+
+// 11. Camera Public Proxy Endpoints (Tunnel local ESP32 stream to anywhere via Ngrok)
+app.get('/api/camera/stream', async (req, res) => {
+  let targetUrl = process.env.ESP32_STREAM_URL || 'http://10.14.51.170:81/stream';
+  
+  try {
+    const dbDevice = await db.get('SELECT stream_url FROM devices WHERE stream_url IS NOT NULL LIMIT 1');
+    if (dbDevice && dbDevice.stream_url) {
+      targetUrl = dbDevice.stream_url;
+    }
+  } catch (e) {}
+
+  res.setHeader('Content-Type', 'multipart/x-mixed-replace; boundary=frame');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+
+  try {
+    const controller = new AbortController();
+    req.on('close', () => controller.abort());
+
+    const response = await fetch(targetUrl, { signal: controller.signal });
+    if (!response.ok || !response.body) {
+      return res.status(502).send('Camera stream unreachable');
+    }
+
+    const reader = response.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(value);
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      console.error('Error proxying camera stream:', err.message);
+    }
+    if (!res.headersSent) {
+      res.status(502).send('Stream error or camera offline');
+    }
+  }
+});
+
+app.get('/api/camera/snapshot', async (req, res) => {
+  const targetUrl = process.env.ESP32_SNAPSHOT_URL || 'http://10.14.51.170/cam-hi.jpg';
+
+  try {
+    const response = await fetch(targetUrl);
+    if (!response.ok) {
+      return res.status(502).json({ error: 'Snapshot unavailable' });
+    }
+
+    const buffer = await response.arrayBuffer();
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    console.error('Error fetching camera snapshot:', err.message);
+    res.status(502).json({ error: 'Snapshot error' });
+  }
+});
+
+// 12. Camera Stream Config Endpoint
+app.get('/api/camera/config', async (req, res) => {
+  try {
+    const hostHeader = req.headers.host || '';
+    const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+    const baseUrl = hostHeader ? `${protocol}://${hostHeader}` : '';
+
+    const dbDevice = await db.get('SELECT stream_url FROM devices WHERE stream_url IS NOT NULL LIMIT 1');
+    const configuredUrl = (dbDevice && dbDevice.stream_url) ? dbDevice.stream_url : 'http://10.14.51.170:81/stream';
+
+    res.json({
+      streamUrl: baseUrl ? `${baseUrl}/api/camera/stream` : '/api/camera/stream',
+      snapshotUrl: baseUrl ? `${baseUrl}/api/camera/snapshot` : '/api/camera/snapshot',
+      directStreamUrl: configuredUrl,
+      directSnapshotUrl: 'http://10.14.51.170/cam-hi.jpg'
+    });
+  } catch (err) {
+    res.json({
+      streamUrl: '/api/camera/stream',
+      snapshotUrl: '/api/camera/snapshot',
+      directStreamUrl: 'http://10.14.51.170:81/stream',
+      directSnapshotUrl: 'http://10.14.51.170/cam-hi.jpg'
+    });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Express REST & WS Server listening on port ${PORT}`);
+const HOST = process.env.HOST || '0.0.0.0';
+server.listen(PORT, HOST, () => {
+  console.log(`Express REST & WS Server listening on http://${HOST}:${PORT}`);
 });

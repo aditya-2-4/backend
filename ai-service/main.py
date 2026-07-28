@@ -15,7 +15,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai-service")
 
 SHARED_API_KEY = os.getenv("SHARED_API_KEY", "secure_esp32_device_shared_api_key_2026")
-BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "https://backend-8-yt04.onrender.com/api/device/event")
+MAIN_PORT = os.getenv("MAIN_PORT", "5000")
+BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", f"http://127.0.0.1:{MAIN_PORT}/api/device/event")
 
 # Global in-memory storage for YOLO model and latest annotated frame
 model = None
