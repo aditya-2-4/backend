@@ -19,37 +19,9 @@ logger = logging.getLogger("ai-service")
 SHARED_API_KEY = os.getenv("SHARED_API_KEY", "secure_esp32_device_shared_api_key_2026")
 BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "https://backend-8-yt04.onrender.com/api/device/event")
 
-# Global in-memory storage for YOLO model and latest annotated frame
+# Global in-memory storage for YOLO model and latest real camera annotated frame
 model = None
 latest_frame_bytes = None
-
-def generate_demo_annotated_frame():
-    # Create a 640x480 dark video stream frame using OpenCV
-    img = np.zeros((480, 640, 3), dtype=np.uint8)
-    img[:] = (20, 26, 18) # Dark farm theme
-
-    # Draw grid pattern lines
-    for x in range(0, 640, 40):
-        cv2.line(img, (x, 0), (x, 480), (30, 40, 30), 1)
-    for y in range(0, 480, 40):
-        cv2.line(img, (0, y), (640, y), (30, 40, 30), 1)
-
-    # Draw simulated bounding box for Human detection
-    cv2.rectangle(img, (180, 100), (360, 400), (0, 255, 127), 2)
-    cv2.rectangle(img, (180, 72), (360, 100), (0, 255, 127), -1)
-    cv2.putText(img, "Human 89.5%", (185, 92), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 2)
-
-    # Draw simulated bounding box for Cattle detection
-    cv2.rectangle(img, (400, 220), (580, 420), (255, 165, 0), 2)
-    cv2.rectangle(img, (400, 195), (580, 220), (255, 165, 0), -1)
-    cv2.putText(img, "Cow / Cattle 92.1%", (405, 213), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-
-    # Draw HUD text
-    cv2.putText(img, "FARMGUARD AI CAMERA 01 [LIVE STREAM]", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 127), 2)
-    cv2.putText(img, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"), (20, 455), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
-
-    _, encoded = cv2.imencode('.jpg', img)
-    return encoded.tobytes()
 
 def get_model():
     global model
@@ -139,8 +111,21 @@ def health_check(request: Request):
 @app.get("/latest-frame")
 def get_latest_frame():
     global latest_frame_bytes
-    frame_data = latest_frame_bytes if latest_frame_bytes is not None else generate_demo_annotated_frame()
-    return Response(content=frame_data, media_type="image/jpeg")
+    if latest_frame_bytes is None:
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html>
+        <body style="background:#0a0f0d; color:#fff; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh;">
+          <div style="text-align:center; padding:30px; border:1px solid #1e2d24; border-radius:12px; background:#121a16; max-width:480px;">
+            <h2 style="color:#10b981;">📷 Waiting for Live Camera Feed</h2>
+            <p style="color:#94a3b8; margin-top:12px; font-size:14px; line-height:1.5;">
+              No fake data enabled. Run <b>npm run bridge</b> on your local machine to stream real frames from <b>http://10.14.51.170/cam-lo.jpg</b>.
+            </p>
+          </div>
+        </body>
+        </html>
+        """, status_code=200)
+    return Response(content=latest_frame_bytes, media_type="image/jpeg")
 
 @app.post("/detect")
 async def detect_objects(
@@ -168,7 +153,7 @@ async def detect_objects(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"YOLO model initialization error: {e}")
 
-    # Run YOLO detection
+    # Run YOLO detection on real image
     results = active_model(image)
 
     detections = []
@@ -208,11 +193,11 @@ async def detect_objects(
                             headers={"x-api-key": SHARED_API_KEY},
                             timeout=5
                         )
-                        logger.info(f"Dispatched event '{label}' to backend, status: {resp.status_code}")
+                        logger.info(f"Dispatched real event '{label}' to backend, status: {resp.status_code}")
                     except Exception as e:
                         logger.error(f"Failed to post detection event to backend: {e}")
 
-    # Store latest annotated frame in memory as JPEG bytes
+    # Store latest real camera annotated frame in memory
     success, encoded_img = cv2.imencode(".jpg", annotated_img)
     if success:
         latest_frame_bytes = encoded_img.tobytes()
