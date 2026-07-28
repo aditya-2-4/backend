@@ -39,7 +39,7 @@ app.use(cors({
   origin: allowedOrigin ? allowedOrigin : (origin, callback) => callback(null, true),
   credentials: true
 }));
-app.use(['/detect', '/api/detect'], express.raw({ type: '*/*', limit: '10mb' }));
+app.post(['/detect', '/api/detect'], express.raw({ type: '*/*', limit: '10mb' }));
 app.use(express.json());
 
 // Create uploads directory if not exists
