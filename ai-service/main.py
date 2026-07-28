@@ -1,6 +1,6 @@
 import os
-# Ensure Ultralytics uses writable temp directory on Render
-os.environ["YOLO_CONFIG_DIR"] = "/tmp/Ultralytics"
+# Set YOLO config directory to /tmp for Render
+os.environ["YOLO_CONFIG_DIR"] = "/tmp"
 
 import logging
 from datetime import datetime, timezone
