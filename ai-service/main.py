@@ -20,12 +20,25 @@ BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "https://backend-8-yt04.onren
 model = None
 latest_frame_bytes = None
 
+def get_model():
+    global model
+    if model is None:
+        logger.info("Loading YOLO model (yolo11n.pt)...")
+        try:
+            model = YOLO("yolo11n.pt")
+            logger.info("YOLO model loaded successfully.")
+        except Exception as e:
+            logger.error(f"Failed to load YOLO model: {e}")
+            raise e
+    return model
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model
-    logger.info("Loading YOLO model (yolo11n.pt)...")
-    model = YOLO("yolo11n.pt")
-    logger.info("YOLO model loaded successfully.")
+    # Try pre-loading model on startup gracefully
+    try:
+        get_model()
+    except Exception as e:
+        logger.warning(f"Startup model pre-load deferred: {e}")
     yield
 
 app = FastAPI(title="FarmGuard AI Detection Service", lifespan=lifespan)
@@ -53,7 +66,7 @@ async def detect_objects(
     request: Request,
     x_api_key: str = Header(None, alias="x-api-key")
 ):
-    global model, latest_frame_bytes
+    global latest_frame_bytes
 
     if not x_api_key or x_api_key != SHARED_API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized device key access")
@@ -69,11 +82,13 @@ async def detect_objects(
     if image is None:
         raise HTTPException(status_code=400, detail="Invalid JPEG image payload")
 
-    if model is None:
-        raise HTTPException(status_code=500, detail="YOLO model is not initialized")
+    try:
+        active_model = get_model()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"YOLO model initialization error: {e}")
 
     # Run YOLO detection
-    results = model(image)
+    results = active_model(image)
 
     detections = []
     annotated_img = image.copy()
