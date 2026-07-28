@@ -198,7 +198,7 @@ async function getDeviceConnectivityStatus(maxAgeSeconds = 90) {
 
 async function formatDeviceObject(device) {
   const connectivity = await getDeviceConnectivityStatus(90);
-  const streamUrl = (device && device.stream_url) ? device.stream_url : (process.env.ESP32_STREAM_URL || 'http://10.14.51.170/cam-hi.jpg');
+  const streamUrl = (device && device.stream_url) ? device.stream_url : (process.env.ESP32_STREAM_URL || 'http://10.14.51.170/cam-lo.jpg');
 
   const baseDevice = device || {
     id: 'ESP32-FG-001',
@@ -680,7 +680,7 @@ async function updateDeviceHeartbeat(req, extraData = {}) {
     if (!streamUrl && clientIp && clientIp !== '127.0.0.1' && clientIp !== '::1') {
       const cleanIp = clientIp.replace(/^.*:/, '');
       if (cleanIp && cleanIp !== 'localhost') {
-        streamUrl = `http://${cleanIp}/cam-hi.jpg`;
+        streamUrl = `http://${cleanIp}/cam-lo.jpg`;
       }
     }
 
@@ -700,7 +700,7 @@ async function updateDeviceHeartbeat(req, extraData = {}) {
       await db.run(
         `INSERT INTO devices (id, name, is_armed, battery_level, signal_strength, last_heartbeat, stream_url) 
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [deviceId, 'ESP32 Security Node', isArmed !== null ? isArmed : 1, battery || 100, signal || 5, ts, streamUrl || 'http://10.14.51.170/cam-hi.jpg']
+        [deviceId, 'ESP32 Security Node', isArmed !== null ? isArmed : 1, battery || 100, signal || 5, ts, streamUrl || 'http://10.14.51.170/cam-lo.jpg']
       );
     }
 
@@ -1743,7 +1743,7 @@ app.get('/api/device/live-frame', verifyDeviceApiKey, async (req, res) => {
 
 // 11. Camera Public Proxy Endpoints (Tunnel local ESP32 stream to anywhere via Ngrok)
 app.get('/api/camera/stream', async (req, res) => {
-  let targetUrl = process.env.ESP32_STREAM_URL || 'http://10.14.51.170:81/stream';
+  let targetUrl = process.env.ESP32_STREAM_URL || 'http://10.14.51.170/cam-lo.jpg';
   
   try {
     const dbDevice = await db.get('SELECT stream_url FROM devices WHERE stream_url IS NOT NULL LIMIT 1');
