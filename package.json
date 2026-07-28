@@ -8,7 +8,8 @@
     "start": "node server.js",
     "dev": "node server.js",
     "postinstall": "pip install -r ai-service/requirements.txt || pip3 install -r ai-service/requirements.txt || true",
-    "ngrok": "node start-ngrok.js"
+    "ngrok": "node start-ngrok.js",
+    "bridge": "node start-camera-bridge.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
