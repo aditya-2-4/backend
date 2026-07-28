@@ -568,6 +568,23 @@ startEmbeddedAIService();
 let globalLatestFrameBuffer = null;
 
 // AI Detection Endpoints
+app.get(['/detect', '/api/detect'], (req, res) => {
+  res.json({
+    service: "FarmGuard AI Object Detection API",
+    status: "active",
+    message: "This detection endpoint receives POST requests containing JPEG binary image payloads.",
+    instructions: {
+      method: "POST",
+      endpoint: "/detect",
+      headers: {
+        "x-api-key": "secure_esp32_device_shared_api_key_2026",
+        "Content-Type": "image/jpeg"
+      },
+      body: "<raw JPEG image bytes>"
+    }
+  });
+});
+
 app.post(['/detect', '/api/detect'], verifyDeviceApiKey, async (req, res) => {
   try {
     const rawImageBuffer = Buffer.isBuffer(req.body) ? req.body : (req.body ? Buffer.from(req.body) : null);
