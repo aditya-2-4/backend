@@ -454,7 +454,6 @@ app.get('/api/health', async (req, res) => {
             </div>
           </div>
           <a href="${process.env.FRONTEND_URL || allowedOrigin || 'https://frontend-six-tau-93.vercel.app'}" class="btn">Open Main Dashboard</a>
-          <a href="/enroll" class="btn" style="margin-top: 10px; background-color: #10b981;">Open Face Enrollment Portal</a>
         </div>
       </body>
       </html>
