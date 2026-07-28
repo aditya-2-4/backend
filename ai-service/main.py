@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Header, HTTPException, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from ultralytics import YOLO
 import cv2
 import numpy as np
@@ -51,14 +51,75 @@ LABEL_MAPPINGS = {
 }
 
 @app.get("/")
-def health_check():
-    return {"status": "ok"}
+def health_check(request: Request):
+    accept_header = request.headers.get("accept", "")
+    if "application/json" in accept_header and "text/html" not in accept_header:
+        return {"status": "ok"}
+    
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>FarmGuard AI Detection Microservice</title>
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0f0d; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .container { background: #121a16; border: 1px solid #1e2d24; border-radius: 16px; padding: 32px; max-width: 560px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+        .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+        .title { font-size: 22px; font-weight: 700; color: #fff; }
+        .badge { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+        .pulse { width: 8px; height: 8px; background: #10b981; border-radius: 50%; animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); } 100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+        .card { background: #1a2620; border: 1px solid #24352b; padding: 16px; border-radius: 12px; }
+        .label { font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+        .value { font-size: 15px; font-weight: 600; color: #f8fafc; font-family: monospace; }
+        .actions { display: flex; flex-direction: column; gap: 12px; }
+        .btn { display: flex; align-items: center; justify-content: center; text-decoration: none; padding: 14px; border-radius: 10px; font-weight: 600; font-size: 14px; transition: all 0.2s; }
+        .btn-primary { background: #10b981; color: #042f1a; }
+        .btn-primary:hover { background: #34d399; }
+        .btn-secondary { background: #1e2d24; color: #cbd5e1; border: 1px solid #2e4336; }
+        .btn-secondary:hover { background: #283c30; color: #fff; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1 class="title">FarmGuard AI Service</h1>
+          <div class="badge"><div class="pulse"></div>ONLINE</div>
+        </div>
+        <div class="grid">
+          <div class="card"><div class="label">YOLO Model</div><div class="value">yolo11n.pt</div></div>
+          <div class="card"><div class="label">Service Status</div><div class="value" style="color: #10b981;">HEALTHY</div></div>
+          <div class="card"><div class="label">Detection Endpoint</div><div class="value">POST /detect</div></div>
+          <div class="card"><div class="label">Latest Frame</div><div class="value">GET /latest-frame</div></div>
+        </div>
+        <div class="actions">
+          <a href="/latest-frame" class="btn btn-primary" target="_blank">View Latest Frame Camera Image</a>
+          <a href="https://backend-8-yt04.onrender.com" class="btn btn-secondary">Open Main Gateway API</a>
+        </div>
+      </div>
+    </body>
+    </html>
+    """)
 
 @app.get("/latest-frame")
 def get_latest_frame():
     global latest_frame_bytes
     if latest_frame_bytes is None:
-        raise HTTPException(status_code=404, detail="No frame received yet")
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html>
+        <body style="background:#0a0f0d; color:#fff; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh;">
+          <div style="text-align:center; padding:20px; border:1px solid #1e2d24; border-radius:12px; background:#121a16;">
+            <h2>No Camera Frame Captured Yet</h2>
+            <p style="color:#94a3b8; margin-top:10px;">Send a POST /detect request with a JPEG image payload to populate this frame buffer.</p>
+          </div>
+        </body>
+        </html>
+        """, status_code=404)
     return Response(content=latest_frame_bytes, media_type="image/jpeg")
 
 @app.post("/detect")
