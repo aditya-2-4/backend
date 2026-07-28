@@ -18,6 +18,7 @@ logger = logging.getLogger("ai-service")
 
 SHARED_API_KEY = os.getenv("SHARED_API_KEY", "secure_esp32_device_shared_api_key_2026")
 BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "https://backend-8-yt04.onrender.com/api/device/event")
+DEFAULT_CAMERA_URL = os.getenv("CAMERA_URL", "http://10.14.51.170/cam-lo.jpg")
 
 # Global in-memory storage for YOLO model and latest real camera annotated frame
 model = None
@@ -111,21 +112,45 @@ def health_check(request: Request):
 @app.get("/latest-frame")
 def get_latest_frame():
     global latest_frame_bytes
-    if latest_frame_bytes is None:
-        return HTMLResponse("""
-        <!DOCTYPE html>
-        <html>
-        <body style="background:#0a0f0d; color:#fff; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh;">
-          <div style="text-align:center; padding:30px; border:1px solid #1e2d24; border-radius:12px; background:#121a16; max-width:480px;">
-            <h2 style="color:#10b981;">📷 Waiting for Live Camera Feed</h2>
-            <p style="color:#94a3b8; margin-top:12px; font-size:14px; line-height:1.5;">
-              No fake data enabled. Run <b>npm run bridge</b> on your local machine to stream real frames from <b>http://10.14.51.170/cam-lo.jpg</b>.
-            </p>
-          </div>
-        </body>
-        </html>
-        """, status_code=200)
-    return Response(content=latest_frame_bytes, media_type="image/jpeg")
+
+    if latest_frame_bytes is not None:
+        return Response(content=latest_frame_bytes, media_type="image/jpeg")
+
+    # If no frame buffered yet, attempt live capture from camera URL
+    try:
+        resp = requests.get(DEFAULT_CAMERA_URL, timeout=3)
+        if resp.status_code == 200 and len(resp.content) > 0:
+            np_arr = np.frombuffer(resp.content, np.uint8)
+            image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+            if image is not None:
+                active_model = get_model()
+                results = active_model(image)
+
+                annotated_img = image.copy()
+                if len(results) > 0:
+                    annotated_img = results[0].plot()
+
+                success, encoded_img = cv2.imencode(".jpg", annotated_img)
+                if success:
+                    latest_frame_bytes = encoded_img.tobytes()
+                    return Response(content=latest_frame_bytes, media_type="image/jpeg")
+    except Exception as e:
+        logger.warning(f"Could not fetch direct frame from {DEFAULT_CAMERA_URL}: {e}")
+
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html>
+    <body style="background:#0a0f0d; color:#fff; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh;">
+      <div style="text-align:center; padding:30px; border:1px solid #1e2d24; border-radius:12px; background:#121a16; max-width:480px;">
+        <h2 style="color:#10b981;">📷 Connecting Live Camera Feed</h2>
+        <p style="color:#94a3b8; margin-top:12px; font-size:14px; line-height:1.5;">
+          Attempting to load live camera feed from <b>http://10.14.51.170/cam-lo.jpg</b>. Run <b>npm run bridge</b> or <b>npm start</b> on your backend machine.
+        </p>
+      </div>
+    </body>
+    </html>
+    """, status_code=200)
 
 @app.post("/detect")
 async def detect_objects(
