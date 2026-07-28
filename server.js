@@ -1783,7 +1783,9 @@ app.get('/api/camera/stream', async (req, res) => {
 });
 
 app.get('/api/camera/snapshot', async (req, res) => {
-  const targetUrl = process.env.ESP32_SNAPSHOT_URL || 'http://10.14.51.170/cam-hi.jpg';
+  const targetUrl = req.query.resolution === 'hi' 
+    ? (process.env.ESP32_SNAPSHOT_HI_URL || 'http://10.14.51.170/cam-hi.jpg')
+    : (process.env.ESP32_SNAPSHOT_URL || 'http://10.14.51.170/cam-lo.jpg');
 
   try {
     const response = await fetch(targetUrl);
@@ -1792,9 +1794,12 @@ app.get('/api/camera/snapshot', async (req, res) => {
     }
 
     const buffer = await response.arrayBuffer();
+    const frameBuffer = Buffer.from(buffer);
+    globalLatestFrameBuffer = frameBuffer;
+
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.send(Buffer.from(buffer));
+    res.send(frameBuffer);
   } catch (err) {
     console.error('Error fetching camera snapshot:', err.message);
     res.status(502).json({ error: 'Snapshot error' });
@@ -1809,23 +1814,75 @@ app.get('/api/camera/config', async (req, res) => {
     const baseUrl = hostHeader ? `${protocol}://${hostHeader}` : '';
 
     const dbDevice = await db.get('SELECT stream_url FROM devices WHERE stream_url IS NOT NULL LIMIT 1');
-    const configuredUrl = (dbDevice && dbDevice.stream_url) ? dbDevice.stream_url : 'http://10.14.51.170:81/stream';
+    const configuredUrl = (dbDevice && dbDevice.stream_url) ? dbDevice.stream_url : 'http://10.14.51.170/cam-lo.jpg';
 
     res.json({
       streamUrl: baseUrl ? `${baseUrl}/api/camera/stream` : '/api/camera/stream',
       snapshotUrl: baseUrl ? `${baseUrl}/api/camera/snapshot` : '/api/camera/snapshot',
       directStreamUrl: configuredUrl,
-      directSnapshotUrl: 'http://10.14.51.170/cam-hi.jpg'
+      directSnapshotUrl: 'http://10.14.51.170/cam-lo.jpg'
     });
   } catch (err) {
     res.json({
       streamUrl: '/api/camera/stream',
       snapshotUrl: '/api/camera/snapshot',
-      directStreamUrl: 'http://10.14.51.170:81/stream',
-      directSnapshotUrl: 'http://10.14.51.170/cam-hi.jpg'
+      directStreamUrl: 'http://10.14.51.170/cam-lo.jpg',
+      directSnapshotUrl: 'http://10.14.51.170/cam-lo.jpg'
     });
   }
 });
+
+// 13. Continuous Background Live Camera Poller & AI Engine
+async function pollCameraAndRunAI() {
+  const cameraUrl = process.env.ESP32_SNAPSHOT_URL || 'http://10.14.51.170/cam-lo.jpg';
+  const aiDetectUrl = process.env.AI_SERVICE_DETECT_URL || 'https://backend-9-tjpb.onrender.com/detect';
+  const apiKey = process.env.DEVICE_API_KEY || 'secure_esp32_device_shared_api_key_2026';
+
+  try {
+    const response = await fetch(cameraUrl, { signal: AbortSignal.timeout(3000) });
+    if (response.ok) {
+      const arrBuf = await response.arrayBuffer();
+      const frameBuffer = Buffer.from(arrBuf);
+
+      globalLatestFrameBuffer = frameBuffer;
+
+      const base64Frame = `data:image/jpeg;base64,${frameBuffer.toString('base64')}`;
+      broadcast({
+        type: 'CAMERA_FRAME',
+        frame: base64Frame,
+        timestamp: new Date().toISOString()
+      });
+
+      try {
+        const aiRes = await fetch(aiDetectUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'image/jpeg',
+            'x-api-key': apiKey
+          },
+          body: frameBuffer,
+          signal: AbortSignal.timeout(4000)
+        });
+
+        if (aiRes.ok) {
+          const aiData = await aiRes.json();
+          if (aiData && aiData.detections) {
+            broadcast({
+              type: 'AI_DETECTION_UPDATE',
+              detections: aiData.detections,
+              timestamp: new Date().toISOString()
+            });
+          }
+        }
+      } catch (aiErr) {}
+    }
+  } catch (err) {}
+
+  setTimeout(pollCameraAndRunAI, 1500);
+}
+
+// Start continuous camera poller
+pollCameraAndRunAI();
 
 const PORT = process.env.PORT || 5000;
 const HOST = process.env.HOST || '0.0.0.0';

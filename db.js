@@ -127,6 +127,17 @@ export async function initDb() {
     )
   `);
 
+  // Create Enrolled Faces table for storing base64 JPEG face images
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS enrolled_faces (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      image_data TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `);
+  await db.exec(`CREATE INDEX IF NOT EXISTS idx_enrolled_faces_name ON enrolled_faces(name)`);
+
   // Create RFID Cards table
   await db.exec(`
     CREATE TABLE IF NOT EXISTS rfid_cards (
@@ -158,15 +169,20 @@ export async function initDb() {
     console.log(`Seeded admin user (user: admin, pass: ${process.env.INITIAL_ADMIN_PASSWORD ? '********' : 'admin123'})`);
   }
 
-  // Seed default device if empty
+  // Seed or update default ESP32 device status
   const deviceCount = await db.get('SELECT COUNT(*) as count FROM devices');
   if (deviceCount.count === 0) {
     await db.run(
-      `INSERT INTO devices (id, name, is_armed, battery_level, signal_strength, last_heartbeat) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      ['ESP32-FG-001', 'Main Farm ESP32 Gatekeeper', 1, 87, 4, new Date().toISOString()]
+      `INSERT INTO devices (id, name, is_armed, battery_level, signal_strength, last_heartbeat, stream_url) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ['ESP32-FG-001', 'Main Farm ESP32 Gatekeeper', 1, 87, 4, new Date().toISOString(), 'http://10.14.51.170/cam-lo.jpg']
     );
     console.log('Seeded ESP32 device status');
+  } else {
+    await db.run(
+      `UPDATE devices SET last_heartbeat = ?, stream_url = COALESCE(stream_url, 'http://10.14.51.170/cam-lo.jpg')`,
+      [new Date().toISOString()]
+    );
   }
 
   // Seed biometrics if empty (Disabled to prevent fake data in production)
