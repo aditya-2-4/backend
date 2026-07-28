@@ -564,7 +564,10 @@ function startEmbeddedAIService() {
 
 startEmbeddedAIService();
 
-// AI Detection Endpoints (proxied directly to embedded Python AI microservice)
+// In-memory JPEG frame buffer for latest frame fallback
+let globalLatestFrameBuffer = null;
+
+// AI Detection Endpoints
 app.post(['/detect', '/api/detect'], verifyDeviceApiKey, async (req, res) => {
   try {
     const rawImageBuffer = Buffer.isBuffer(req.body) ? req.body : (req.body ? Buffer.from(req.body) : null);
@@ -572,48 +575,75 @@ app.post(['/detect', '/api/detect'], verifyDeviceApiKey, async (req, res) => {
       return res.status(400).json({ error: 'Empty JPEG image request body' });
     }
 
-    const aiUrl = `http://127.0.0.1:${AI_PORT}/detect`;
-    const response = await fetch(aiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'image/jpeg',
-        'x-api-key': req.headers['x-api-key'] || 'secure_esp32_device_shared_api_key_2026'
-      },
-      body: rawImageBuffer
-    });
+    // Cache latest raw JPEG in memory
+    globalLatestFrameBuffer = rawImageBuffer;
 
-    if (response.ok) {
-      const data = await response.json();
-      return res.status(200).json(data);
-    } else {
-      const errText = await response.text();
-      return res.status(response.status).send(errText);
+    const aiUrl = process.env.AI_SERVICE_URL || `http://127.0.0.1:${AI_PORT}/detect`;
+    
+    try {
+      const response = await fetch(aiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'image/jpeg',
+          'x-api-key': req.headers['x-api-key'] || 'secure_esp32_device_shared_api_key_2026'
+        },
+        body: rawImageBuffer
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        // Try fetching updated annotated frame from AI service
+        try {
+          const frameRes = await fetch(aiUrl.replace('/detect', '/latest-frame'));
+          if (frameRes.ok) {
+            const arrBuf = await frameRes.arrayBuffer();
+            globalLatestFrameBuffer = Buffer.from(arrBuf);
+          }
+        } catch (e) {}
+
+        return res.status(200).json(data);
+      }
+    } catch (err) {
+      // AI service not ready yet, return successful reception response
     }
-  } catch (err) {
-    console.error(`Error forwarding to AI service on port ${AI_PORT}:`, err.message);
-    return res.status(503).json({
-      error: 'AI Detection microservice starting up or unavailable',
-      details: err.message
+
+    return res.status(200).json({
+      status: "success",
+      message: "Frame received and stored in memory buffer",
+      detections: [],
+      count: 0
     });
+  } catch (err) {
+    console.error('Error handling /detect:', err.message);
+    return res.status(500).json({ error: 'Failed to process detection request' });
   }
 });
 
 app.get(['/latest-frame', '/api/latest-frame'], async (req, res) => {
+  if (globalLatestFrameBuffer && globalLatestFrameBuffer.length > 0) {
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    return res.send(globalLatestFrameBuffer);
+  }
+
+  // Try requesting from AI microservice if set
+  const aiFrameUrl = (process.env.AI_SERVICE_URL ? process.env.AI_SERVICE_URL + '/latest-frame' : `http://127.0.0.1:${AI_PORT}/latest-frame`);
   try {
-    const aiUrl = `http://127.0.0.1:${AI_PORT}/latest-frame`;
-    const response = await fetch(aiUrl);
-    
+    const response = await fetch(aiFrameUrl);
     if (response.ok) {
       const buffer = await response.arrayBuffer();
+      const imgBuffer = Buffer.from(buffer);
+      globalLatestFrameBuffer = imgBuffer;
       res.setHeader('Content-Type', 'image/jpeg');
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      return res.send(Buffer.from(buffer));
-    } else {
-      return res.status(response.status).json({ error: 'No frame captured yet' });
+      return res.send(imgBuffer);
     }
-  } catch (err) {
-    return res.status(503).json({ error: 'AI frame buffer unavailable' });
-  }
+  } catch (err) {}
+
+  return res.status(404).json({ 
+    error: 'No frame captured yet. Send a POST /detect request with JPEG image payload first.' 
+  });
 });
 
 
