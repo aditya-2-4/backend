@@ -18,7 +18,6 @@ logger = logging.getLogger("ai-service")
 
 SHARED_API_KEY = os.getenv("SHARED_API_KEY", "secure_esp32_device_shared_api_key_2026")
 BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "https://backend-8-yt04.onrender.com/api/device/event")
-DEFAULT_CAMERA_URL = os.getenv("CAMERA_URL", "http://10.14.51.170/cam-lo.jpg")
 
 # Global in-memory storage for YOLO model and latest real camera annotated frame
 model = None
@@ -112,7 +111,6 @@ def health_check(request: Request):
 @app.get("/latest-frame")
 def get_latest_frame():
     global latest_frame_bytes
-
     if latest_frame_bytes is not None:
         return Response(content=latest_frame_bytes, media_type="image/jpeg")
 
@@ -121,7 +119,7 @@ def get_latest_frame():
     <html>
     <body style="background:#0a0f0d; color:#fff; font-family:sans-serif; display:flex; align-items:center; justify-content:center; height:100vh;">
       <div style="text-align:center; padding:30px; border:1px solid #1e2d24; border-radius:12px; background:#121a16; max-width:480px;">
-        <h2 style="color:#10b981;">📷 Waiting for Live Camera Feed</h2>
+        <h2 style="color:#10b981;">Waiting for Live Camera Feed</h2>
         <p style="color:#94a3b8; margin-top:12px; font-size:14px; line-height:1.5;">
           No fake data enabled. Run <b>npm run bridge</b> on your local machine to stream real frames from <b>http://10.14.51.170/cam-lo.jpg</b>.
         </p>
@@ -129,6 +127,38 @@ def get_latest_frame():
     </body>
     </html>
     """, status_code=200)
+
+@app.get("/detect")
+def get_detect_info(request: Request):
+    accept_header = request.headers.get("accept", "")
+    if "text/html" in accept_header or "*/*" in accept_header:
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>POST /detect Endpoint Info</title>
+          <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0f0d; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+            .box { background: #121a16; border: 1px solid #1e2d24; border-radius: 16px; padding: 32px; max-width: 520px; width: 100%; text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+            h2 { color: #10b981; margin-bottom: 12px; font-size: 22px; }
+            p { color: #94a3b8; font-size: 14px; line-height: 1.6; margin-bottom: 24px; }
+            .btn { display: inline-block; background: #10b981; color: #042f1a; padding: 14px 28px; border-radius: 10px; font-weight: 600; text-decoration: none; font-size: 14px; transition: all 0.2s; }
+            .btn:hover { background: #34d399; }
+          </style>
+        </head>
+        <body>
+          <div class="box">
+            <h2>Object & Face Detection API</h2>
+            <p>
+              The <b>/detect</b> endpoint is an active API that receives raw JPEG camera frames via HTTP <b>POST</b> requests along with your device API key.
+            </p>
+            <a href="/latest-frame" class="btn">View Live Camera Feed Image</a>
+          </div>
+        </body>
+        </html>
+        """)
+    return {"message": "Detection endpoint ready. Send POST /detect with JPEG binary body and x-api-key header."}
 
 @app.post("/detect")
 async def detect_objects(
