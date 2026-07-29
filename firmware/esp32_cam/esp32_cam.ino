@@ -11,21 +11,18 @@
 const char* ssid = "Nothing Phone (3a) Lite 3411 2";
 const char* password = "adii1234";
 
-// ------ BACKEND & HUGGING FACE CONFIG ------
+// ------ BACKEND CONFIG ------
 const char* heartbeatUrl       = "https://backend-8-yt04.onrender.com/api/device/status";
 const char* rfidScanUrl        = "https://backend-8-yt04.onrender.com/rfid/scan";
-
-// High-Performance 104GB RAM Hugging Face Space Object Detection URL:
-const char* objectDetectionUrl = "https://adiityamishra99-farmguard-ai-detection.hf.space/detect";
-
+const char* objectDetectionUrl = "https://backend-8-yt04.onrender.com/detect"; // <--- Primary Fast Cloud Endpoint
 const char* deviceId            = "ESP32-FG-001";
 const char* apiKey              = "secure_esp32_device_shared_api_key_2026";
 
 unsigned long lastHeartbeat = 0;
-const unsigned long heartbeatInterval = 4000; // Send heartbeat every 4s to stay SOLID ONLINE
+const unsigned long heartbeatInterval = 4000; // 4s regular heartbeat window
 
 unsigned long lastDetection = 0;
-const unsigned long detectionInterval = 2500; // Smooth 2.5s detection frame upload window
+const unsigned long detectionInterval = 2000; // Smooth 2s frame detection window
 
 WiFiClientSecure secureClient;
 
@@ -175,9 +172,8 @@ void sendForObjectDetection() {
 
   HTTPClient http;
   http.setReuse(true);
-  http.setTimeout(5000);
+  http.setTimeout(4000);
 
-  // Send raw JPEG image to Hugging Face Space AI Detection Endpoint
   if (!http.begin(secureClient, objectDetectionUrl)) {
     esp_camera_fb_return(fb);
     return;
@@ -191,12 +187,12 @@ void sendForObjectDetection() {
 
   if (code == 200) {
     String responseJson = http.getString();
-    Serial.println("[HF SPACE AI DETECTED]: " + responseJson);
+    Serial.println("[DETECTION SUCCESS 200]: " + responseJson);
     lastHeartbeat = millis();
   } else if (code > 0) {
-    Serial.printf("Hugging Face response HTTP code: %d\n", code);
+    Serial.printf("Object detection response code: %d\n", code);
   } else {
-    Serial.printf("Hugging Face POST failed: %s\n", http.errorToString(code).c_str());
+    Serial.printf("Object detection POST failed: %s\n", http.errorToString(code).c_str());
   }
 
   http.end();
