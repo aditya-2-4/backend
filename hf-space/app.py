@@ -27,18 +27,25 @@ SHARED_API_KEY = os.getenv("SHARED_API_KEY", "secure_esp32_device_shared_api_key
 BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "https://backend-8-yt04.onrender.com/api/device/event")
 
 # Load YOLO model once at startup
-logger.info("Initializing YOLO model (yolo11n.pt)...")
+logger.info("Initializing high-accuracy YOLO model (yolo11n.pt)...")
 model = YOLO("yolo11n.pt")
 logger.info("YOLO model loaded successfully.")
 
 # Global storage for latest annotated camera frame
 latest_annotated_frame = None
 
-# Comprehensive 80-Class COCO mapping covering Humans, Animals, Electronics, Vehicles, and Tools
-COCO_CLASSES_MAPPING = {
-    "person": "Human / Person",
+HIGH_CONFIDENCE_CLASSES = {"person", "cow", "dog", "cat", "horse", "sheep", "Human", "Cow / Cattle"}
+
+LABEL_MAPPINGS = {
+    "person": "Human",
+    "cow": "Cow / Cattle",
+}
+
+# Full COCO 80 categories fallback dictionary
+COCO_80_CLASSES = {
+    "person": "Human",
     "bicycle": "Bicycle",
-    "car": "Car / Vehicle",
+    "car": "Car",
     "motorcycle": "Motorcycle",
     "airplane": "Airplane",
     "bus": "Bus",
@@ -54,10 +61,10 @@ COCO_CLASSES_MAPPING = {
     "cat": "Cat",
     "dog": "Dog",
     "horse": "Horse",
-    "sheep": "Sheep / Livestock",
+    "sheep": "Sheep",
     "cow": "Cow / Cattle",
     "elephant": "Elephant",
-    "bear": "Bear / Wild Animal",
+    "bear": "Bear",
     "zebra": "Zebra",
     "giraffe": "Giraffe",
     "backpack": "Backpack",
@@ -77,7 +84,7 @@ COCO_CLASSES_MAPPING = {
     "tennis racket": "Tennis Racket",
     "bottle": "Bottle",
     "wine glass": "Wine Glass",
-    "cup": "Cup / Container",
+    "cup": "Cup",
     "fork": "Fork",
     "knife": "Knife",
     "spoon": "Spoon",
@@ -93,17 +100,17 @@ COCO_CLASSES_MAPPING = {
     "donut": "Donut",
     "cake": "Cake",
     "chair": "Chair",
-    "couch": "Sofa / Couch",
+    "couch": "Couch",
     "potted plant": "Potted Plant",
     "bed": "Bed",
     "dining table": "Dining Table",
     "toilet": "Toilet",
     "tv": "TV / Monitor",
-    "laptop": "Laptop / Computer",
+    "laptop": "Laptop",
     "mouse": "Computer Mouse",
     "remote": "Remote Control",
     "keyboard": "Keyboard",
-    "cell phone": "Mobile Phone / Electronics",
+    "cell phone": "Mobile Phone",
     "microwave": "Microwave",
     "oven": "Oven",
     "toaster": "Toaster",
@@ -112,14 +119,14 @@ COCO_CLASSES_MAPPING = {
     "book": "Book",
     "clock": "Clock",
     "vase": "Vase",
-    "scissors": "Scissors / Tool",
+    "scissors": "Scissors",
     "teddy bear": "Teddy Bear",
     "hair drier": "Hair Drier",
     "toothbrush": "Toothbrush"
 }
 
 @gpu_decorator
-def detect_objects_api(input_image, api_key: str = "", conf_threshold: float = 0.25):
+def detect_objects_api(input_image, api_key: str = ""):
     global latest_annotated_frame
 
     if api_key and api_key != SHARED_API_KEY:
@@ -141,15 +148,15 @@ def detect_objects_api(input_image, api_key: str = "", conf_threshold: float = 0
     if image is None:
         return {"error": "Invalid JPEG image payload"}, None
 
-    # Run YOLO detection with conf threshold (supports 80 COCO categories)
-    results = model(image, conf=conf_threshold)
+    # Run YOLO detection across all 80 object categories
+    results = model(image, conf=0.35, iou=0.45)
 
     detections = []
     annotated_bgr = image.copy()
 
     if len(results) > 0:
         result = results[0]
-        annotated_bgr = result.plot()
+        annotated_bgr = result.plot(conf=True, line_width=2)
 
         boxes = result.boxes
         if boxes is not None:
@@ -158,30 +165,35 @@ def detect_objects_api(input_image, api_key: str = "", conf_threshold: float = 0
                 confidence = float(box.conf[0].item())
                 raw_class_name = result.names.get(cls_id, str(cls_id)).lower()
 
-                label = COCO_CLASSES_MAPPING.get(raw_class_name, raw_class_name.capitalize())
+                label = LABEL_MAPPINGS.get(raw_class_name, COCO_80_CLASSES.get(raw_class_name, raw_class_name.capitalize()))
+                threshold = 0.35 if (raw_class_name in HIGH_CONFIDENCE_CLASSES or label in HIGH_CONFIDENCE_CLASSES) else 0.35
 
-                detections.append({
-                    "label": label,
-                    "confidence": round(confidence, 4)
-                })
+                if confidence >= threshold:
+                    conf_pct = f"{round(confidence * 100, 1)}%"
+                    detections.append({
+                        "label": label,
+                        "confidence_score": round(confidence, 4),
+                        "confidence_percentage": conf_pct
+                    })
 
-                # Dispatch event to Node.js backend
-                iso_timestamp = datetime.now(timezone.utc).isoformat()
-                event_payload = {
-                    "detection_type": label,
-                    "zone_name": "Camera-01",
-                    "timestamp": iso_timestamp
-                }
-                try:
-                    resp = requests.post(
-                        BACKEND_EVENT_URL,
-                        json=event_payload,
-                        headers={"x-api-key": SHARED_API_KEY},
-                        timeout=4
-                    )
-                    logger.info(f"Dispatched event '{label}' to backend, status: {resp.status_code}")
-                except Exception as e:
-                    logger.error(f"Failed to post detection event to backend: {e}")
+                    # Dispatch event to Node.js backend
+                    iso_timestamp = datetime.now(timezone.utc).isoformat()
+                    event_payload = {
+                        "detection_type": label,
+                        "confidence": conf_pct,
+                        "zone_name": "Camera-01",
+                        "timestamp": iso_timestamp
+                    }
+                    try:
+                        resp = requests.post(
+                            BACKEND_EVENT_URL,
+                            json=event_payload,
+                            headers={"x-api-key": SHARED_API_KEY},
+                            timeout=4
+                        )
+                        logger.info(f"Dispatched event '{label}' ({conf_pct}) to backend, status: {resp.status_code}")
+                    except Exception as e:
+                        logger.error(f"Failed to post detection event to backend: {e}")
 
     # Convert annotated frame back to RGB for Gradio UI display
     annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
@@ -210,8 +222,8 @@ custom_theme = gr.themes.Soft(
 
 with gr.Blocks() as demo:
     gr.Markdown("""
-    # 🛡️ FarmGuard Multi-Object AI Detection Service
-    ### High-Precision 80+ Category Object, Wild Animal, Human & Electronics Detection
+    # 🛡️ FarmGuard High-Accuracy AI Detection Service
+    ### Precision 80 Category Object, Wild Animal, Human & Electronics Detection
     """)
 
     with gr.Tabs():
@@ -221,32 +233,30 @@ with gr.Blocks() as demo:
                 refresh_btn = gr.Button("🔄 Refresh Latest Frame", variant="primary")
                 refresh_btn.click(fn=get_latest_frame, outputs=latest_image_view, api_name="latest_frame")
 
-        with gr.TabItem("🧪 Test 80+ Category Detection"):
+        with gr.TabItem("🧪 Test High-Accuracy Detection"):
             with gr.Row():
                 with gr.Column():
                     test_input = gr.Image(type="numpy", label="Upload JPEG Image")
-                    conf_slider = gr.Slider(minimum=0.10, maximum=0.90, value=0.25, step=0.05, label="Detection Confidence Sensitivity")
                     api_key_input = gr.Textbox(value=SHARED_API_KEY, label="Device API Key", type="password")
-                    detect_btn = gr.Button("🚀 Run YOLO 80+ Object Detection", variant="primary")
+                    detect_btn = gr.Button("🚀 Run High-Precision Detection", variant="primary")
                 with gr.Column():
-                    json_output = gr.JSON(label="Detections JSON Output")
+                    json_output = gr.JSON(label="High-Accuracy Detections Output")
                     annotated_output = gr.Image(label="Annotated Image Output")
 
             detect_btn.click(
                 fn=detect_objects_api,
-                inputs=[test_input, api_key_input, conf_slider],
+                inputs=[test_input, api_key_input],
                 outputs=[json_output, annotated_output],
                 api_name="detect"
             )
 
         with gr.TabItem("📋 Supported 80 Categories"):
             gr.Markdown("""
-            ### 🎯 80 Detected Object & Animal Categories:
-            - 👨‍🌾 **Humans**: Person, Farmer, Visitor
-            - 🐂 **Livestock & Animals**: Cow/Cattle, Sheep, Horse, Elephant, Bear, Dog, Cat, Bird, Zebra, Giraffe
-            - 💻 **Electronics & Tech**: Mobile Phone, Laptop, Computer Mouse, TV/Monitor, Keyboard, Remote Control, Microwave, Oven, Toaster, Refrigerator, Clock
-            - 🚗 **Vehicles & Transit**: Car, Truck, Bus, Motorcycle, Bicycle, Train, Boat, Airplane
-            - 🛠️ **Tools & Outdoor Gear**: Backpack, Suitcase, Umbrella, Scissors/Tools, Potted Plant, Bottle, Cup, Chair, Sofa, Bed, Table
+            ### 🎯 80 High-Precision Categories & Animals:
+            - 👨‍🌾 **Humans**: Person -> mapped to `Human`
+            - 🐂 **Livestock & Wild Animals**: Cow -> mapped to `Cow / Cattle`, Sheep, Horse, Elephant, Bear, Dog, Cat, Bird, Zebra, Giraffe
+            - 💻 **Electronics**: Mobile Phone, Computer Mouse, Laptop, TV/Monitor, Keyboard, Remote Control, Microwave, Oven, Toaster, Clock
+            - 🚗 **Vehicles**: Car, Truck, Bus, Motorcycle, Bicycle, Train, Boat
             """)
 
 if __name__ == "__main__":
