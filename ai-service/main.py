@@ -37,11 +37,7 @@ def get_model():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Application starting up...")
-    try:
-        get_model()
-    except Exception as e:
-        logger.warning(f"Model initialization deferred to first request: {e}")
+    logger.info("Application starting up... (Instant port binding)")
     yield
 
 app = FastAPI(title="FarmGuard AI Detection Service", lifespan=lifespan)
