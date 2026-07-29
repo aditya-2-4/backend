@@ -9,6 +9,8 @@ import requests
 import cv2
 import numpy as np
 from ultralytics import YOLO
+from fastapi import FastAPI, Request, Header, HTTPException, Response
+from fastapi.responses import JSONResponse
 import gradio as gr
 
 # Safe decorator fallback for ZeroGPU vs CPU Basic spaces
@@ -125,28 +127,8 @@ COCO_80_CLASSES = {
     "toothbrush": "Toothbrush"
 }
 
-@gpu_decorator
-def detect_objects_api(input_image, api_key: str = ""):
+def process_detection(image):
     global latest_annotated_frame
-
-    if api_key and api_key != SHARED_API_KEY:
-        return {"error": "Unauthorized device key access"}, None
-
-    if input_image is None:
-        return {"error": "No image payload provided"}, None
-
-    # Handle image format input (numpy array, string path, or file bytes)
-    if isinstance(input_image, str):
-        image = cv2.imread(input_image)
-    elif isinstance(input_image, np.ndarray):
-        # Gradio passes RGB numpy array, convert to BGR for OpenCV
-        image = cv2.cvtColor(input_image, cv2.COLOR_RGB2BGR)
-    else:
-        np_arr = np.frombuffer(input_image, np.uint8)
-        image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
-    if image is None:
-        return {"error": "Invalid JPEG image payload"}, None
 
     # Run YOLO detection across all 80 object categories
     results = model(image, conf=0.35, iou=0.45)
@@ -199,6 +181,62 @@ def detect_objects_api(input_image, api_key: str = ""):
     annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
     latest_annotated_frame = annotated_rgb
 
+    return detections, annotated_rgb
+
+# Create FastAPI app for direct raw JPEG POST HTTP requests from ESP32 C++
+fastapi_app = FastAPI(title="FarmGuard AI Microservice")
+
+@fastapi_app.post("/detect")
+async def detect_http_endpoint(
+    request: Request,
+    x_api_key: str = Header(None, alias="x-api-key")
+):
+    if not x_api_key or x_api_key != SHARED_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized device key access")
+
+    raw_body = await request.body()
+    if not raw_body:
+        raise HTTPException(status_code=400, detail="Empty image body")
+
+    np_arr = np.frombuffer(raw_body, np.uint8)
+    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+    if image is None:
+        raise HTTPException(status_code=400, detail="Invalid JPEG image payload")
+
+    detections, _ = process_detection(image)
+    return JSONResponse(content={"detections": detections})
+
+@fastapi_app.get("/detect")
+def detect_info():
+    return {
+        "status": "active",
+        "service": "FarmGuard Hugging Face Space AI Engine",
+        "endpoint": "POST /detect",
+        "instructions": "Send HTTP POST with raw JPEG binary body and x-api-key header"
+    }
+
+# Gradio Interface
+@gpu_decorator
+def detect_objects_api(input_image, api_key: str = ""):
+    if api_key and api_key != SHARED_API_KEY:
+        return {"error": "Unauthorized device key access"}, None
+
+    if input_image is None:
+        return {"error": "No image payload provided"}, None
+
+    if isinstance(input_image, str):
+        image = cv2.imread(input_image)
+    elif isinstance(input_image, np.ndarray):
+        image = cv2.cvtColor(input_image, cv2.COLOR_RGB2BGR)
+    else:
+        np_arr = np.frombuffer(input_image, np.uint8)
+        image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+    if image is None:
+        return {"error": "Invalid JPEG image payload"}, None
+
+    detections, annotated_rgb = process_detection(image)
     return {"total_detected": len(detections), "detections": detections}, annotated_rgb
 
 def get_latest_frame():
@@ -210,7 +248,6 @@ def get_latest_frame():
         return img
     return latest_annotated_frame
 
-# Gradio Custom Interface Theme
 custom_theme = gr.themes.Soft(
     primary_hue="emerald",
     neutral_hue="slate",
@@ -223,7 +260,7 @@ custom_theme = gr.themes.Soft(
 with gr.Blocks() as demo:
     gr.Markdown("""
     # 🛡️ FarmGuard High-Accuracy AI Detection Service
-    ### Precision 80 Category Object, Wild Animal, Human & Electronics Detection
+    ### Direct ESP32 HTTP POST Endpoint: `https://adiityamishra99-farmguard-ai-detection.hf.space/detect`
     """)
 
     with gr.Tabs():
@@ -259,5 +296,5 @@ with gr.Blocks() as demo:
             - 🚗 **Vehicles**: Car, Truck, Bus, Motorcycle, Bicycle, Train, Boat
             """)
 
-if __name__ == "__main__":
-    demo.queue().launch(theme=custom_theme)
+# Mount Gradio onto FastAPI app
+app = gr.mount_gradio_app(fastapi_app, demo, path="/")
