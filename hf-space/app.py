@@ -1,4 +1,6 @@
 import os
+os.environ["YOLO_CONFIG_DIR"] = "/tmp"
+
 import time
 import logging
 from datetime import datetime, timezone
@@ -8,6 +10,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import gradio as gr
+import spaces
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +34,7 @@ LABEL_MAPPINGS = {
     "cow": "Cow / Cattle",
 }
 
+@spaces.GPU
 def detect_objects_api(input_image, api_key: str = ""):
     global latest_annotated_frame
 
@@ -112,7 +116,7 @@ def get_latest_frame():
         return img
     return latest_annotated_frame
 
-# Gradio Custom Interface
+# Gradio Custom Interface Theme
 custom_theme = gr.themes.Soft(
     primary_hue="emerald",
     neutral_hue="slate",
@@ -122,10 +126,10 @@ custom_theme = gr.themes.Soft(
     block_border_color="#1e2d24",
 )
 
-with gr.Blocks(theme=custom_theme, title="FarmGuard AI Detection Service") as demo:
+with gr.Blocks() as demo:
     gr.Markdown("""
     # 🛡️ FarmGuard AI Detection Service
-    ### High-Performance YOLO11 Object & Face Detection Microservice
+    ### High-Performance ZeroGPU YOLO11 Object & Face Detection Microservice
     """)
 
     with gr.Tabs():
@@ -175,4 +179,4 @@ with gr.Blocks(theme=custom_theme, title="FarmGuard AI Detection Service") as de
             """)
 
 if __name__ == "__main__":
-    demo.queue().launch()
+    demo.queue().launch(theme=custom_theme)
