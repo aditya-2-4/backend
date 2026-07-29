@@ -1,4 +1,3 @@
-spaces
 ultralytics
 opencv-python-headless
 numpy

@@ -10,7 +10,14 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import gradio as gr
-import spaces
+
+# Safe decorator fallback for ZeroGPU vs CPU Basic spaces
+try:
+    import spaces
+    gpu_decorator = spaces.GPU
+except Exception:
+    def gpu_decorator(func):
+        return func
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -34,7 +41,7 @@ LABEL_MAPPINGS = {
     "cow": "Cow / Cattle",
 }
 
-@spaces.GPU
+@gpu_decorator
 def detect_objects_api(input_image, api_key: str = ""):
     global latest_annotated_frame
 
@@ -129,7 +136,7 @@ custom_theme = gr.themes.Soft(
 with gr.Blocks() as demo:
     gr.Markdown("""
     # 🛡️ FarmGuard AI Detection Service
-    ### High-Performance ZeroGPU YOLO11 Object & Face Detection Microservice
+    ### High-Performance YOLO11 Object & Face Detection Microservice
     """)
 
     with gr.Tabs():
@@ -163,19 +170,6 @@ with gr.Blocks() as demo:
             - **Space URL**: `https://adiityamishra99-farmguard-ai-detection.hf.space`
             - **Detection Endpoint**: `api_name="detect"`
             - **Latest Frame Endpoint**: `api_name="latest_frame"`
-
-            #### Python Client Example:
-            ```python
-            from gradio_client import Client, handle_file
-
-            client = Client("adiityamishra99/farmguard-ai-detection")
-            result = client.predict(
-                input_image=handle_file('camera_snapshot.jpg'),
-                api_key="secure_esp32_device_shared_api_key_2026",
-                api_name="/detect"
-            )
-            print(result)
-            ```
             """)
 
 if __name__ == "__main__":
