@@ -5,15 +5,18 @@ import requests
 import cv2
 import numpy as np
 
-# Camera URL (local Wi-Fi IP) and Primary Backend detection service URL
+# Camera URL (local Wi-Fi IP)
 CAMERA_URL = os.getenv("CAMERA_URL", "http://10.14.51.170/cam-lo.jpg")
+# Primary Backend detection service URL
 AI_DETECT_URL = os.getenv("AI_DETECT_URL", "https://backend-8-yt04.onrender.com/detect")
+# Hugging Face Space API URL
+HF_SPACE_URL = os.getenv("HF_SPACE_URL", "https://adiityamishra99-farmguard-ai-detection.hf.space/api/predict")
 API_KEY = os.getenv("SHARED_API_KEY", "secure_esp32_device_shared_api_key_2026")
 
 print("==========================================================")
 print(" OpenCV Camera-to-Cloud AI Stream Bridge Active")
 print(f" Camera Source: {CAMERA_URL}")
-print(f" Cloud AI Target: {AI_DETECT_URL}")
+print(f" Primary Target: {AI_DETECT_URL}")
 print("==========================================================")
 
 while True:
@@ -44,7 +47,7 @@ while True:
                 if ai_resp.status_code == 200:
                     data = ai_resp.json()
                     count = len(data.get("detections", []))
-                    print(f"[{time.strftime('%H:%M:%S')}] Frame sent -> Primary Backend | Detections: {count}")
+                    print(f"[{time.strftime('%H:%M:%S')}] Frame sent -> Cloud AI | Detections: {count}")
                 else:
                     print(f"[{time.strftime('%H:%M:%S')}] AI service response: {ai_resp.status_code}")
             else:
