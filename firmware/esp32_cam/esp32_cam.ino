@@ -11,15 +11,18 @@
 const char* ssid = "Nothing Phone (3a) Lite 3411 2";
 const char* password = "adii1234";
 
-// ------ BACKEND CONFIG ------
+// ------ BACKEND & HUGGING FACE CONFIG ------
 const char* heartbeatUrl       = "https://backend-8-yt04.onrender.com/api/device/status";
 const char* rfidScanUrl        = "https://backend-8-yt04.onrender.com/rfid/scan";
-const char* objectDetectionUrl = "https://backend-8-yt04.onrender.com/detect";
+
+// High-Performance 104GB RAM Hugging Face Space Object Detection URL:
+const char* objectDetectionUrl = "https://adiityamishra99-farmguard-ai-detection.hf.space/detect";
+
 const char* deviceId            = "ESP32-FG-001";
 const char* apiKey              = "secure_esp32_device_shared_api_key_2026";
 
 unsigned long lastHeartbeat = 0;
-const unsigned long heartbeatInterval = 4000; // Send heartbeat every 4s to stay 100% SOLID ONLINE
+const unsigned long heartbeatInterval = 4000; // Send heartbeat every 4s to stay SOLID ONLINE
 
 unsigned long lastDetection = 0;
 const unsigned long detectionInterval = 2500; // Smooth 2.5s detection frame upload window
@@ -134,7 +137,7 @@ void sendHeartbeat() {
   if (WiFi.status() != WL_CONNECTED) return;
 
   HTTPClient http;
-  http.setReuse(true); // Reuse connection for speed
+  http.setReuse(true);
   http.setTimeout(3000);
 
   if (!http.begin(secureClient, heartbeatUrl)) {
@@ -157,9 +160,7 @@ void sendHeartbeat() {
   int responseCode = http.POST(payload);
   if (responseCode > 0) {
     Serial.printf("[ONLINE] Heartbeat status: %d\n", responseCode);
-    lastHeartbeat = millis(); // Refresh timestamp on success
-  } else {
-    Serial.printf("Heartbeat failed: %s\n", http.errorToString(responseCode).c_str());
+    lastHeartbeat = millis();
   }
   http.end();
 }
@@ -174,8 +175,9 @@ void sendForObjectDetection() {
 
   HTTPClient http;
   http.setReuse(true);
-  http.setTimeout(4000);
+  http.setTimeout(5000);
 
+  // Send raw JPEG image to Hugging Face Space AI Detection Endpoint
   if (!http.begin(secureClient, objectDetectionUrl)) {
     esp_camera_fb_return(fb);
     return;
@@ -187,12 +189,14 @@ void sendForObjectDetection() {
 
   int code = http.POST(fb->buf, fb->len);
 
-  if (code > 0) {
-    Serial.printf("[FRAME SENT] Object detection response: %d\n", code);
-    // Successful frame upload also acts as live heartbeat!
+  if (code == 200) {
+    String responseJson = http.getString();
+    Serial.println("[HF SPACE AI DETECTED]: " + responseJson);
     lastHeartbeat = millis();
+  } else if (code > 0) {
+    Serial.printf("Hugging Face response HTTP code: %d\n", code);
   } else {
-    Serial.printf("Object detection upload failed: %s\n", http.errorToString(code).c_str());
+    Serial.printf("Hugging Face POST failed: %s\n", http.errorToString(code).c_str());
   }
 
   http.end();
@@ -200,7 +204,6 @@ void sendForObjectDetection() {
 }
 
 void checkRFID() {
-  // Update buzzer state (non-blocking 2-second auto turn-off)
   if (buzzerActive && millis() - buzzerStartTime >= buzzerDuration) {
     digitalWrite(BUZZER_PIN, LOW);
     buzzerActive = false;
@@ -224,7 +227,6 @@ void checkRFID() {
   digitalWrite(BUZZER_PIN, HIGH);
   buzzerActive = true;
   buzzerStartTime = millis();
-  // ---------------------------------------------------------
 
   HTTPClient http;
   http.setTimeout(3000);
@@ -253,7 +255,6 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
 
-  // High-reliability Wi-Fi auto reconnect
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.persistent(true);
@@ -288,12 +289,10 @@ void loop() {
   checkRFID();
   checkWiFi();
 
-  // Send regular heartbeat every 4s
   if (millis() - lastHeartbeat >= heartbeatInterval) {
     sendHeartbeat();
   }
 
-  // Send camera detection frames every 2.5s
   if (millis() - lastDetection >= detectionInterval) {
     sendForObjectDetection();
     lastDetection = millis();
