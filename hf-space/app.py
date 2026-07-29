@@ -9,8 +9,6 @@ import requests
 import cv2
 import numpy as np
 from ultralytics import YOLO
-from fastapi import FastAPI, Request, Header, HTTPException, Response
-from fastapi.responses import JSONResponse
 import gradio as gr
 
 # Safe decorator fallback for ZeroGPU vs CPU Basic spaces
@@ -33,7 +31,6 @@ logger.info("Initializing high-accuracy YOLO model (yolo11n.pt)...")
 model = YOLO("yolo11n.pt")
 logger.info("YOLO model loaded successfully.")
 
-# Global storage for latest annotated camera frame
 latest_annotated_frame = None
 
 HIGH_CONFIDENCE_CLASSES = {"person", "cow", "dog", "cat", "horse", "sheep", "Human", "Cow / Cattle"}
@@ -43,7 +40,6 @@ LABEL_MAPPINGS = {
     "cow": "Cow / Cattle",
 }
 
-# Full COCO 80 categories fallback dictionary
 COCO_80_CLASSES = {
     "person": "Human",
     "bicycle": "Bicycle",
@@ -129,10 +125,7 @@ COCO_80_CLASSES = {
 
 def process_detection(image):
     global latest_annotated_frame
-
-    # Run YOLO detection across all 80 object categories
     results = model(image, conf=0.35, iou=0.45)
-
     detections = []
     annotated_bgr = image.copy()
 
@@ -158,7 +151,6 @@ def process_detection(image):
                         "confidence_percentage": conf_pct
                     })
 
-                    # Dispatch event to Node.js backend
                     iso_timestamp = datetime.now(timezone.utc).isoformat()
                     event_payload = {
                         "detection_type": label,
@@ -177,48 +169,12 @@ def process_detection(image):
                     except Exception as e:
                         logger.error(f"Failed to post detection event to backend: {e}")
 
-    # Convert annotated frame back to RGB for Gradio UI display
     annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
     latest_annotated_frame = annotated_rgb
-
     return detections, annotated_rgb
 
-# Create FastAPI app for direct raw JPEG POST HTTP requests from ESP32 C++
-fastapi_app = FastAPI(title="FarmGuard AI Microservice")
-
-@fastapi_app.post("/detect")
-async def detect_http_endpoint(
-    request: Request,
-    x_api_key: str = Header(None, alias="x-api-key")
-):
-    if not x_api_key or x_api_key != SHARED_API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized device key access")
-
-    raw_body = await request.body()
-    if not raw_body:
-        raise HTTPException(status_code=400, detail="Empty image body")
-
-    np_arr = np.frombuffer(raw_body, np.uint8)
-    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
-    if image is None:
-        raise HTTPException(status_code=400, detail="Invalid JPEG image payload")
-
-    detections, _ = process_detection(image)
-    return JSONResponse(content={"detections": detections})
-
-@fastapi_app.get("/detect")
-def detect_info():
-    return {
-        "status": "active",
-        "service": "FarmGuard Hugging Face Space AI Engine",
-        "endpoint": "POST /detect",
-        "instructions": "Send HTTP POST with raw JPEG binary body and x-api-key header"
-    }
-
-# Gradio Interface
 @gpu_decorator
-def detect_objects_api(input_image, api_key: str = ""):
+def predict_gradio(input_image, api_key: str = ""):
     if api_key and api_key != SHARED_API_KEY:
         return {"error": "Unauthorized device key access"}, None
 
@@ -260,7 +216,7 @@ custom_theme = gr.themes.Soft(
 with gr.Blocks() as demo:
     gr.Markdown("""
     # 🛡️ FarmGuard High-Accuracy AI Detection Service
-    ### Direct ESP32 HTTP POST Endpoint: `https://adiityamishra99-farmguard-ai-detection.hf.space/detect`
+    ### High-Performance 104GB RAM Microservice
     """)
 
     with gr.Tabs():
@@ -281,20 +237,10 @@ with gr.Blocks() as demo:
                     annotated_output = gr.Image(label="Annotated Image Output")
 
             detect_btn.click(
-                fn=detect_objects_api,
+                fn=predict_gradio,
                 inputs=[test_input, api_key_input],
                 outputs=[json_output, annotated_output],
-                api_name="detect"
+                api_name="predict"
             )
 
-        with gr.TabItem("📋 Supported 80 Categories"):
-            gr.Markdown("""
-            ### 🎯 80 High-Precision Categories & Animals:
-            - 👨‍🌾 **Humans**: Person -> mapped to `Human`
-            - 🐂 **Livestock & Wild Animals**: Cow -> mapped to `Cow / Cattle`, Sheep, Horse, Elephant, Bear, Dog, Cat, Bird, Zebra, Giraffe
-            - 💻 **Electronics**: Mobile Phone, Computer Mouse, Laptop, TV/Monitor, Keyboard, Remote Control, Microwave, Oven, Toaster, Clock
-            - 🚗 **Vehicles**: Car, Truck, Bus, Motorcycle, Bicycle, Train, Boat
-            """)
-
-# Mount Gradio onto FastAPI app
-app = gr.mount_gradio_app(fastapi_app, demo, path="/")
+demo.queue().launch(theme=custom_theme)
