@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Header, HTTPException, Response
 from fastapi.responses import JSONResponse, HTMLResponse
-from ultralytics import YOLO
 import cv2
 import numpy as np
 import requests
@@ -26,8 +25,9 @@ latest_frame_bytes = None
 def get_model():
     global model
     if model is None:
-        logger.info("Initializing YOLO model (yolo11n.pt)...")
+        logger.info("Lazy loading YOLO model (yolo11n.pt)...")
         try:
+            from ultralytics import YOLO
             model = YOLO("yolo11n.pt")
             logger.info("YOLO model loaded successfully.")
         except Exception as e:
@@ -37,7 +37,7 @@ def get_model():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Application starting up... (Instant port binding)")
+    logger.info("Application starting up... (Instant 50ms port binding)")
     yield
 
 app = FastAPI(title="FarmGuard AI Detection Service", lifespan=lifespan)
