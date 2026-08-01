@@ -1926,7 +1926,27 @@ app.get('/api/camera/snapshot', async (req, res) => {
   }
 });
 
-// 12. Camera Stream Config Endpoint
+// 12. Camera Stream Config Endpoints
+app.post('/api/device/stream-url', async (req, res) => {
+  const { stream_url } = req.body;
+  if (!stream_url) return res.status(400).json({ error: 'stream_url is required' });
+  try {
+    await db.run('UPDATE devices SET stream_url = ? WHERE id = "ESP32-FG-001"', [stream_url.trim()]);
+    res.json({ success: true, stream_url: stream_url.trim() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update stream URL' });
+  }
+});
+
+app.delete('/api/device/stream-url', async (req, res) => {
+  try {
+    await db.run('UPDATE devices SET stream_url = "http://10.129.157.170/cam-lo.jpg" WHERE id = "ESP32-FG-001"');
+    res.json({ success: true, message: 'Stream URL reset to default' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to reset stream URL' });
+  }
+});
+
 app.get('/api/camera/config', async (req, res) => {
   try {
     const hostHeader = req.headers.host || '';
