@@ -1571,17 +1571,17 @@ app.delete('/api/faces/:name', async (req, res) => {
 });
 
 // 8. RFID Management Endpoints
-app.get('/api/rfid', authenticateToken, async (req, res) => {
+app.get('/api/rfid', async (req, res) => {
   try {
     const cards = await db.all("SELECT * FROM rfid_cards ORDER BY registered_at DESC");
-    res.json(cards);
+    res.json(cards || []);
   } catch (err) {
-    console.error(err);
+    console.error('Error fetching RFID cards:', err);
     res.status(500).json({ error: 'Failed to retrieve RFID cards' });
   }
 });
 
-app.post('/api/rfid/register', authenticateToken, async (req, res) => {
+app.post('/api/rfid/register', async (req, res) => {
   const { uid, user_name } = req.body;
   if (!uid) return res.status(400).json({ error: 'UID is required' });
 
@@ -1619,7 +1619,7 @@ app.post('/api/rfid/register', authenticateToken, async (req, res) => {
   }
 });
 
-app.put('/api/rfid/:id', authenticateToken, async (req, res) => {
+app.put('/api/rfid/:id', async (req, res) => {
   const { id } = req.params;
   const { user_name, status } = req.body;
   try {
@@ -1639,7 +1639,7 @@ app.put('/api/rfid/:id', authenticateToken, async (req, res) => {
   }
 });
 
-app.delete('/api/rfid/:id', authenticateToken, async (req, res) => {
+app.delete('/api/rfid/:id', async (req, res) => {
   const { id } = req.params;
   try {
     await db.run('DELETE FROM rfid_cards WHERE id = ?', [id]);
