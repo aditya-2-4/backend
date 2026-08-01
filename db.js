@@ -175,12 +175,12 @@ export async function initDb() {
     await db.run(
       `INSERT INTO devices (id, name, is_armed, battery_level, signal_strength, last_heartbeat, stream_url) 
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ['ESP32-FG-001', 'Main Farm ESP32 Gatekeeper', 1, 87, 4, new Date().toISOString(), 'http://10.14.51.170/cam-lo.jpg']
+      ['ESP32-FG-001', 'Main Farm ESP32 Gatekeeper', 1, 87, 4, new Date().toISOString(), 'http://10.129.157.170/cam-lo.jpg']
     );
     console.log('Seeded ESP32 device status');
   } else {
     await db.run(
-      `UPDATE devices SET last_heartbeat = ?, stream_url = COALESCE(stream_url, 'http://10.14.51.170/cam-lo.jpg')`,
+      `UPDATE devices SET last_heartbeat = ?, stream_url = COALESCE(stream_url, 'http://10.129.157.170/cam-lo.jpg')`,
       [new Date().toISOString()]
     );
   }

@@ -189,7 +189,7 @@ async function getDeviceConnectivityStatus(maxAgeSeconds = 120) {
 
 async function formatDeviceObject(device) {
   const connectivity = await getDeviceConnectivityStatus(30);
-  const streamUrl = (device && device.stream_url) ? device.stream_url : (process.env.ESP32_STREAM_URL || 'http://10.14.51.170/cam-lo.jpg');
+  const streamUrl = (device && device.stream_url) ? device.stream_url : (process.env.ESP32_STREAM_URL || 'http://10.129.157.170/cam-lo.jpg');
 
   const baseDevice = device || {
     id: 'ESP32-FG-001',
@@ -658,7 +658,7 @@ app.get(['/latest-frame', '/api/latest-frame'], async (req, res) => {
       <div style="text-align:center; padding:30px; border:1px solid #1e2d24; border-radius:12px; background:#121a16; max-width:480px;">
         <h2 style="color:#10b981;">📷 Live Camera Standby</h2>
         <p style="color:#94a3b8; margin-top:12px; font-size:14px; line-height:1.5;">
-          No fake data enabled. Connect your ESP32 camera or run <b>npm run bridge</b> to stream live frames from <b>http://10.14.51.170/cam-lo.jpg</b>.
+          No fake data enabled. Connect your ESP32 camera or run <b>npm run bridge</b> to stream live frames from <b>http://10.129.157.170/cam-lo.jpg</b>.
         </p>
       </div>
     </body>
@@ -703,7 +703,7 @@ async function updateDeviceHeartbeat(req, extraData = {}) {
       await db.run(
         `INSERT INTO devices (id, name, is_armed, battery_level, signal_strength, last_heartbeat, stream_url) 
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [deviceId, 'ESP32 Security Node', isArmed !== null ? isArmed : 1, battery || 100, signal || 5, ts, streamUrl || 'http://10.14.51.170/cam-lo.jpg']
+        [deviceId, 'ESP32 Security Node', isArmed !== null ? isArmed : 1, battery || 100, signal || 5, ts, streamUrl || 'http://10.129.157.170/cam-lo.jpg']
       );
     }
 
@@ -1809,7 +1809,7 @@ app.get('/api/device/live-frame', verifyDeviceApiKey, async (req, res) => {
 
 // 11. Camera Public Proxy Endpoints (Tunnel local ESP32 stream to anywhere via Ngrok)
 app.get('/api/camera/stream', async (req, res) => {
-  let targetUrl = process.env.ESP32_STREAM_URL || 'http://10.14.51.170/cam-lo.jpg';
+  let targetUrl = process.env.ESP32_STREAM_URL || 'http://10.129.157.170/cam-lo.jpg';
   
   try {
     const dbDevice = await db.get('SELECT stream_url FROM devices WHERE stream_url IS NOT NULL LIMIT 1');
@@ -1851,7 +1851,7 @@ app.get('/api/camera/stream', async (req, res) => {
 app.get('/api/camera/snapshot', async (req, res) => {
   const targetUrl = req.query.resolution === 'hi' 
     ? (process.env.ESP32_SNAPSHOT_HI_URL || 'http://10.14.51.170/cam-hi.jpg')
-    : (process.env.ESP32_SNAPSHOT_URL || 'http://10.14.51.170/cam-lo.jpg');
+    : (process.env.ESP32_SNAPSHOT_URL || 'http://10.129.157.170/cam-lo.jpg');
 
   try {
     const response = await fetch(targetUrl);
@@ -1880,20 +1880,20 @@ app.get('/api/camera/config', async (req, res) => {
     const baseUrl = hostHeader ? `${protocol}://${hostHeader}` : '';
 
     const dbDevice = await db.get('SELECT stream_url FROM devices WHERE stream_url IS NOT NULL LIMIT 1');
-    const configuredUrl = (dbDevice && dbDevice.stream_url) ? dbDevice.stream_url : 'http://10.14.51.170/cam-lo.jpg';
+    const configuredUrl = (dbDevice && dbDevice.stream_url) ? dbDevice.stream_url : 'http://10.129.157.170/cam-lo.jpg';
 
     res.json({
       streamUrl: baseUrl ? `${baseUrl}/api/camera/stream` : '/api/camera/stream',
       snapshotUrl: baseUrl ? `${baseUrl}/api/camera/snapshot` : '/api/camera/snapshot',
       directStreamUrl: configuredUrl,
-      directSnapshotUrl: 'http://10.14.51.170/cam-lo.jpg'
+      directSnapshotUrl: 'http://10.129.157.170/cam-lo.jpg'
     });
   } catch (err) {
     res.json({
       streamUrl: '/api/camera/stream',
       snapshotUrl: '/api/camera/snapshot',
-      directStreamUrl: 'http://10.14.51.170/cam-lo.jpg',
-      directSnapshotUrl: 'http://10.14.51.170/cam-lo.jpg'
+      directStreamUrl: 'http://10.129.157.170/cam-lo.jpg',
+      directSnapshotUrl: 'http://10.129.157.170/cam-lo.jpg'
     });
   }
 });
