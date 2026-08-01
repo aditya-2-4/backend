@@ -2037,33 +2037,81 @@ app.post('/detect', express.raw({ type: '*/*', limit: '10mb' }), async (req, res
   }
 });
 
-// Helper to analyze JPEG frame buffer when HF AI space is sleeping or timing out
-function analyzeFrameFallback(buffer) {
-  if (!buffer || buffer.length < 100) return [];
-  let sum = 0;
-  const sampleSize = Math.min(buffer.length, 1000);
-  for (let i = 0; i < sampleSize; i += 10) {
-    sum += buffer[i];
-  }
-  const avg = sum / (sampleSize / 10);
+// 14. Real-time HuggingFace Gradio YOLO AI Integration Engine
+async function queryHuggingFaceGradioAI(frameBuffer) {
+  if (!frameBuffer || frameBuffer.length < 50) return null;
+  const baseUrl = 'https://adiityamishra99-farmguard-ai-detection.hf.space/gradio_api';
+  
+  try {
+    const formData = new FormData();
+    const blob = new Blob([frameBuffer], { type: 'image/jpeg' });
+    formData.append('files', blob, 'camera_frame.jpg');
 
-  if (avg > 25) {
-    return [
-      { label: 'Person / Human Detected', confidence: 0.96, bbox: [0.15, 0.1, 0.85, 0.9] },
-      { label: 'Camera Zone Scan', confidence: 0.92, bbox: [0.05, 0.05, 0.95, 0.95] }
-    ];
-  } else {
-    return [
-      { label: 'Low Light / Scanning Zone', confidence: 0.85, bbox: [0.1, 0.1, 0.9, 0.9] }
-    ];
+    const uploadRes = await fetch(`${baseUrl}/upload`, {
+      method: 'POST',
+      body: formData,
+      signal: AbortSignal.timeout(3500)
+    });
+
+    if (!uploadRes.ok) return null;
+    const uploadData = await uploadRes.json();
+    if (!Array.isArray(uploadData) || !uploadData[0]) return null;
+
+    const filePath = uploadData[0];
+
+    const callRes = await fetch(`${baseUrl}/call/predict`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        data: [
+          { path: filePath, meta: { _type: 'gradio.FileData' } },
+          'secure_esp32_device_shared_api_key_2026'
+        ]
+      }),
+      signal: AbortSignal.timeout(3500)
+    });
+
+    if (!callRes.ok) return null;
+    const callData = await callRes.json();
+    const eventId = callData.event_id;
+    if (!eventId) return null;
+
+    const streamRes = await fetch(`${baseUrl}/call/predict/${eventId}`, {
+      signal: AbortSignal.timeout(4000)
+    });
+
+    if (!streamRes.ok) return null;
+    const text = await streamRes.text();
+    
+    const lines = text.split('\n');
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const rawJson = line.substring(6).trim();
+        const parsed = JSON.parse(rawJson);
+        if (Array.isArray(parsed) && parsed[0]) {
+          const aiResult = parsed[0]; // { total_detected: N, detections: [...] }
+          const mediaObj = parsed[1];  // FileData with url to annotated image
+          const detections = (aiResult.detections || []).map(d => ({
+            label: d.label,
+            confidence: d.confidence_score || (parseFloat(d.confidence_percentage) / 100) || 0.9,
+            confidence_percentage: d.confidence_percentage || `${((d.confidence_score || 0.9) * 100).toFixed(1)}%`
+          }));
+          return {
+            total_detected: aiResult.total_detected || detections.length,
+            detections: detections,
+            annotated_url: mediaObj ? mediaObj.url : null
+          };
+        }
+      }
+    }
+  } catch (err) {
+    console.error('HuggingFace AI Engine note:', err.message);
   }
+  return null;
 }
 
-// 14. Continuous Background Live Camera Poller & AI Engine
+// 15. Continuous Background Live Camera Poller & Real AI Engine
 async function pollCameraAndRunAI() {
-  const hfSpaceUrl = process.env.HF_AI_URL || 'https://adiityamishra99-farmguard-ai-detection.hf.space/detect-raw';
-  const apiKey = process.env.DEVICE_API_KEY || 'secure_esp32_device_shared_api_key_2026';
-
   if (globalLatestFrameBuffer && globalLatestFrameBuffer.length > 0) {
     const base64Frame = `data:image/jpeg;base64,${globalLatestFrameBuffer.toString('base64')}`;
     broadcast({
@@ -2072,36 +2120,16 @@ async function pollCameraAndRunAI() {
       timestamp: new Date().toISOString()
     });
 
-    let detections = [];
-    try {
-      const aiRes = await fetch(hfSpaceUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'image/jpeg',
-          'x-api-key': apiKey
-        },
-        body: globalLatestFrameBuffer,
-        signal: AbortSignal.timeout(3000)
+    const aiResult = await queryHuggingFaceGradioAI(globalLatestFrameBuffer);
+    if (aiResult) {
+      broadcast({
+        type: 'AI_DETECTION_UPDATE',
+        detections: aiResult.detections || [],
+        count: aiResult.total_detected || 0,
+        annotated_url: aiResult.annotated_url || null,
+        timestamp: new Date().toISOString()
       });
-
-      if (aiRes.ok) {
-        const aiData = await aiRes.json();
-        if (aiData && Array.isArray(aiData.detections) && aiData.detections.length > 0) {
-          detections = aiData.detections;
-        }
-      }
-    } catch (aiErr) {}
-
-    if (!detections || detections.length === 0) {
-      detections = analyzeFrameFallback(globalLatestFrameBuffer);
     }
-
-    broadcast({
-      type: 'AI_DETECTION_UPDATE',
-      detections: detections,
-      count: detections.length,
-      timestamp: new Date().toISOString()
-    });
   }
 
   setTimeout(pollCameraAndRunAI, 1500);
