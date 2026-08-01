@@ -1581,26 +1581,45 @@ app.get('/api/rfid', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/api/rfid/register', authenticateToken, requireRole(['owner']), async (req, res) => {
+app.post('/api/rfid/register', authenticateToken, async (req, res) => {
   const { uid, user_name } = req.body;
   if (!uid) return res.status(400).json({ error: 'UID is required' });
 
+  const cleanUid = String(uid).replace(/[:\s-]/g, '').toUpperCase();
+  const userName = user_name && user_name.trim() ? user_name.trim() : 'Authorized User';
+
   try {
     const ts = new Date().toISOString();
+
+    // Check if card already exists
+    const existing = await db.get(
+      `SELECT * FROM rfid_cards WHERE REPLACE(REPLACE(REPLACE(UPPER(uid), ':', ''), ' ', ''), '-', '') = ?`,
+      [cleanUid]
+    );
+
+    if (existing) {
+      await db.run(
+        'UPDATE rfid_cards SET user_name = ?, status = "Active" WHERE id = ?',
+        [userName, existing.id]
+      );
+      const updatedCard = await db.get('SELECT * FROM rfid_cards WHERE id = ?', [existing.id]);
+      return res.json(updatedCard);
+    }
+
     await db.run(
       'INSERT INTO rfid_cards (uid, user_name, status, registered_at) VALUES (?, ?, ?, ?)',
-      [uid, user_name || null, 'Active', ts]
+      [cleanUid, userName, 'Active', ts]
     );
 
     const newCard = await db.get('SELECT * FROM rfid_cards WHERE id = last_insert_rowid()');
     res.status(201).json(newCard);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to register RFID (UID must be unique)' });
+    console.error('RFID Register Error:', err);
+    res.status(500).json({ error: 'Failed to register RFID card' });
   }
 });
 
-app.put('/api/rfid/:id', authenticateToken, requireRole(['owner']), async (req, res) => {
+app.put('/api/rfid/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { user_name, status } = req.body;
   try {
@@ -1620,7 +1639,7 @@ app.put('/api/rfid/:id', authenticateToken, requireRole(['owner']), async (req, 
   }
 });
 
-app.delete('/api/rfid/:id', authenticateToken, requireRole(['owner']), async (req, res) => {
+app.delete('/api/rfid/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
   try {
     await db.run('DELETE FROM rfid_cards WHERE id = ?', [id]);
@@ -1642,13 +1661,16 @@ app.post(['/rfid/scan', '/api/rfid/scan'], async (req, res) => {
   }
 
   const cardId = String(rawCardId).trim().toUpperCase();
+  const cleanCardId = cardId.replace(/[:\s-]/g, '');
   const timestamp = new Date().toISOString();
   updateDeviceHeartbeat(req);
 
   try {
     const rfidCard = await db.get(
-      'SELECT * FROM rfid_cards WHERE UPPER(uid) = UPPER(?) AND (status = "Active" OR status IS NULL)',
-      [cardId]
+      `SELECT * FROM rfid_cards 
+       WHERE REPLACE(REPLACE(REPLACE(UPPER(uid), ':', ''), ' ', ''), '-', '') = ? 
+       AND (status = 'Active' OR status IS NULL)`,
+      [cleanCardId]
     );
 
     const isMatch = !!rfidCard;

@@ -149,6 +149,14 @@ export async function initDb() {
     )
   `);
 
+  const rfidCount = await db.get('SELECT COUNT(*) as count FROM rfid_cards');
+  if (rfidCount.count === 0) {
+    await db.run(
+      'INSERT INTO rfid_cards (uid, user_name, status, registered_at) VALUES (?, ?, ?, ?)',
+      ['9A49D55', 'Aditya Mishra (Farm Owner)', 'Active', new Date().toISOString()]
+    );
+  }
+
 
   // Create Unknown Faces table
   await db.exec(`
