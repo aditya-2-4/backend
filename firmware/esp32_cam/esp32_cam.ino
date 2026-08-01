@@ -11,10 +11,11 @@
 const char* ssid = "Nothing Phone (3a) Lite 3411 2";
 const char* password = "adii1234";
 
-// ------ BACKEND CONFIG ------
+// ------ BACKEND & AI CONFIG ------
 const char* heartbeatUrl       = "https://backend-8-yt04.onrender.com/api/device/status";
 const char* rfidScanUrl        = "https://backend-8-yt04.onrender.com/rfid/scan";
-const char* objectDetectionUrl = "https://backend-8-yt04.onrender.com/detect"; // <--- Primary Fast Cloud Endpoint
+// Primary High-Performance Detection Endpoint
+const char* objectDetectionUrl = "https://backend-8-yt04.onrender.com/detect"; 
 const char* deviceId            = "ESP32-FG-001";
 const char* apiKey              = "secure_esp32_device_shared_api_key_2026";
 
@@ -22,7 +23,7 @@ unsigned long lastHeartbeat = 0;
 const unsigned long heartbeatInterval = 4000; // 4s regular heartbeat window
 
 unsigned long lastDetection = 0;
-const unsigned long detectionInterval = 2000; // Smooth 2s frame detection window
+const unsigned long detectionInterval = 2000; // 2s frame detection window
 
 WiFiClientSecure secureClient;
 
@@ -30,7 +31,7 @@ WiFiClientSecure secureClient;
 #define BUZZER_PIN 2
 bool buzzerActive = false;
 unsigned long buzzerStartTime = 0;
-const unsigned long buzzerDuration = 2000; // Exactly 2 seconds (2000ms)
+const unsigned long buzzerDuration = 2000; // 2000ms
 
 // ------ AI-THINKER CAMERA PIN CONFIG ------
 #define PWDN_GPIO_NUM     32
@@ -91,7 +92,25 @@ void setupCamera() {
   if (err != ESP_OK) {
     Serial.printf("Camera init failed: 0x%x\n", err);
   } else {
-    Serial.println("Camera ready");
+    Serial.println("Camera initialized successfully");
+    sensor_t * s = esp_camera_sensor_get();
+    if (s != NULL) {
+      s->set_brightness(s, 1);     // -2 to 2 (Enhanced Brightness for clear view)
+      s->set_contrast(s, 1);       // -2 to 2 (Enhanced Contrast)
+      s->set_saturation(s, 0);     // -2 to 2
+      s->set_whitebal(s, 1);       // Auto White Balance ON
+      s->set_awb_gain(s, 1);       // Auto White Balance Gain ON
+      s->set_wb_mode(s, 0);        // Auto WB mode
+      s->set_exposure_ctrl(s, 1);  // Auto Exposure Control ON
+      s->set_aec2(s, 1);           // AEC DSP ON
+      s->set_ae_level(s, 0);       // AE level
+      s->set_gain_ctrl(s, 1);      // Auto Gain Control ON
+      s->set_agc_gain(s, 12);      // AGC Gain Boost
+      s->set_bpc(s, 1);            // Black Pixel Correction ON
+      s->set_wpc(s, 1);            // White Pixel Correction ON
+      s->set_raw_gma(s, 1);        // Raw Gamma Correction ON
+      s->set_lenc(s, 1);           // Lens Correction ON
+    }
   }
 }
 
@@ -143,7 +162,6 @@ void sendHeartbeat() {
 
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-API-Key", apiKey);
-  http.addHeader("Connection", "keep-alive");
 
   StaticJsonDocument<200> doc;
   doc["device_id"] = deviceId;
@@ -157,7 +175,10 @@ void sendHeartbeat() {
   int responseCode = http.POST(payload);
   if (responseCode > 0) {
     Serial.printf("[ONLINE] Heartbeat status: %d\n", responseCode);
-    lastHeartbeat = millis();
+    lastHeartbeat = millis(); // Update timestamp only on actual attempt
+  } else {
+    Serial.printf("[HEARTBEAT WARN] HTTP Code: %d (%s)\n", responseCode, http.errorToString(responseCode).c_str());
+    lastHeartbeat = millis() - (heartbeatInterval - 2000); // Retry sooner (in 2s) if failed
   }
   http.end();
 }
@@ -167,6 +188,7 @@ void sendForObjectDetection() {
 
   camera_fb_t * fb = esp_camera_fb_get();
   if (!fb) {
+    Serial.println("Camera capture failed for detection");
     return;
   }
 
@@ -175,24 +197,24 @@ void sendForObjectDetection() {
   http.setTimeout(4000);
 
   if (!http.begin(secureClient, objectDetectionUrl)) {
+    Serial.println("HTTP connection to Backend failed");
     esp_camera_fb_return(fb);
     return;
   }
 
   http.addHeader("Content-Type", "image/jpeg");
   http.addHeader("X-API-Key", apiKey);
-  http.addHeader("Connection", "keep-alive");
 
+  // Send raw JPEG binary stream to /detect
   int code = http.POST(fb->buf, fb->len);
 
   if (code == 200) {
     String responseJson = http.getString();
     Serial.println("[DETECTION SUCCESS 200]: " + responseJson);
-    lastHeartbeat = millis();
   } else if (code > 0) {
-    Serial.printf("Object detection response code: %d\n", code);
+    Serial.printf("Detection HTTP Code: %d\n", code);
   } else {
-    Serial.printf("Object detection POST failed: %s\n", http.errorToString(code).c_str());
+    Serial.printf("Detection POST Failed: %s\n", http.errorToString(code).c_str());
   }
 
   http.end();
@@ -205,10 +227,7 @@ void checkRFID() {
     buzzerActive = false;
   }
 
-  if (!rfid.PICC_IsNewCardPresent()) {
-    return;
-  }
-  if (!rfid.PICC_ReadCardSerial()) {
+  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) {
     return;
   }
 
@@ -219,25 +238,31 @@ void checkRFID() {
   cardId.toUpperCase();
   Serial.println("Card detected: " + cardId);
 
-  // ---- BUZZER STARTS IMMEDIATELY FOR EXACTLY 2 SECONDS ----
   digitalWrite(BUZZER_PIN, HIGH);
   buzzerActive = true;
   buzzerStartTime = millis();
 
   HTTPClient http;
+  http.setReuse(true);
   http.setTimeout(3000);
+
   if (!http.begin(secureClient, rfidScanUrl)) {
+    Serial.println("HTTP begin failed (RFID)");
     rfid.PICC_HaltA();
     rfid.PCD_StopCrypto1();
     return;
   }
+
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-API-Key", apiKey);
+
   String payload = "{\"cardId\":\"" + cardId + "\"}";
   int httpCode = http.POST(payload);
 
   if (httpCode > 0) {
     Serial.println("RFID scan response: " + http.getString());
+  } else {
+    Serial.printf("RFID scan failed: %s\n", http.errorToString(httpCode).c_str());
   }
 
   http.end();
@@ -262,9 +287,8 @@ void setup() {
     Serial.print(".");
   }
   Serial.println();
-  Serial.print("Camera Ready! Use 'http://");
-  Serial.print(WiFi.localIP());
-  Serial.println("' to connect");
+  Serial.print("Camera Ready! IP: ");
+  Serial.println(WiFi.localIP());
 
   secureClient.setInsecure();
 

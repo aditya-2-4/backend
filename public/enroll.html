@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FarmGuard — Face Enrollment Portal</title>
+  
+  <!-- MediaPipe CDN Dependencies -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js" crossorigin="anonymous"></script>
+
+  <style>
+    :root {
+      --bg-dark: #0a0a0a;
+      --card-bg: #121212;
+      --card-inner: #1a1a1a;
+      --border-color: #2e854e;
+      --border-subtle: #2a2a2a;
+      --accent-emerald: #10b981;
+      --accent-green: #2e854e;
+      --accent-hover: #3fa364;
+      --amber-warning: #f59e0b;
+      --red-alert: #ef4444;
+      --text-main: #f0f6fc;
+      --text-muted: #8b949e;
+      --radius: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 520px;
+      background-color: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      box-shadow: 0 12px 40px rgba(16, 185, 129, 0.12), 0 4px 12px rgba(0, 0, 0, 0.8);
+      padding: 28px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 16px;
+    }
+
+    .brand-title {
+      font-size: 20px;
+      font-weight: 800;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      letter-spacing: -0.5px;
+    }
+
+    .brand-icon {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, #10b981, #2e854e);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 14px;
+      color: #ffffff;
+    }
+
+    .system-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent-emerald);
+      background-color: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      padding: 4px 10px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .status-pulse {
+      width: 7px;
+      height: 7px;
+      background-color: var(--accent-emerald);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--accent-emerald);
+      animation: pulse-ring 1.5s infinite;
+    }
+
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+      70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+    /* Views */
+    .view-section {
+      display: none;
+    }
+
+    .view-section.active {
+      display: block;
+      animation: fadeIn 0.3s ease-in-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Form Styles */
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .form-input {
+      width: 100%;
+      background-color: var(--card-inner);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 12px 14px;
+      color: var(--text-main);
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .form-input:focus {
+      border-color: var(--accent-emerald);
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+    }
+
+    .btn {
+      width: 100%;
+      background-color: var(--accent-green);
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      padding: 14px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: background-color 0.2s, transform 0.1s;
+    }
+
+    .btn:hover {
+      background-color: var(--accent-hover);
+    }
+
+    .btn:active {
+      transform: scale(0.99);
+    }
+
+    .btn-secondary {
+      background-color: #242424;
+      border: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      margin-top: 10px;
+    }
+
+    .btn-secondary:hover {
+      background-color: #303030;
+    }
+
+    /* Camera Container & Video Preview */
+    .camera-wrapper {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      background-color: #000000;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 2px solid var(--border-subtle);
+      margin-bottom: 16px;
+    }
+
+    .camera-wrapper video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1); /* Mirror camera for natural selfie feel */
+    }
+
+    .camera-wrapper canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      transform: scaleX(-1); /* Match video mirror */
+      pointer-events: none;
+    }
+
+    /* Shutter Flash Animation */
+    .shutter-flash {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #ffffff;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.05s ease-out;
+      z-index: 10;
+    }
+
+    .shutter-flash.flash {
+      opacity: 0.8;
+    }
+
+    /* Detection Status Pills & Progress */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background-color: var(--card-inner);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 14px;
+    }
+
+    .status-badge-text {
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-badge-text.searching {
+      color: var(--amber-warning);
+    }
+
+    .status-badge-text.detected {
+      color: var(--accent-emerald);
+    }
+
+    .status-badge-text.capturing {
+      color: #3b82f6;
+    }
+
+    .progress-container {
+      width: 100%;
+      height: 6px;
+      background-color: #242424;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #10b981, #3fa364);
+      transition: width 0.1s linear;
+    }
+
+    /* Photo capture progress indicators */
+    .capture-dots {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background-color: #242424;
+      border: 1px solid var(--border-subtle);
+      transition: background-color 0.3s, transform 0.2s;
+    }
+
+    .dot.active {
+      background-color: var(--accent-emerald);
+      border-color: var(--accent-emerald);
+      transform: scale(1.25);
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+    }
+
+    /* Success / Result View */
+    .result-card {
+      text-align: center;
+      padding: 10px 0;
+    }
+
+    .success-icon {
+      width: 64px;
+      height: 64px;
+      background-color: rgba(16, 185, 129, 0.15);
+      border: 2px solid var(--accent-emerald);
+      color: var(--accent-emerald);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      margin: 0 auto 16px auto;
+    }
+
+    .error-icon {
+      width: 64px;
+      height: 64px;
+      background-color: rgba(239, 68, 68, 0.15);
+      border: 2px solid var(--red-alert);
+      color: var(--red-alert);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      margin: 0 auto 16px auto;
+    }
+
+    .result-title {
+      font-size: 20px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .result-sub {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+
+    .photo-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .photo-thumb {
+      width: 100%;
+      aspect-ratio: 1;
+      border-radius: 8px;
+      object-fit: cover;
+      border: 1px solid var(--border-subtle);
+      background-color: #000000;
+    }
+
+    /* Loading Spinner */
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid rgba(255, 255, 255, 0.2);
+      border-radius: 50%;
+      border-top-color: #ffffff;
+      animation: spin 0.8s infinite linear;
+      display: inline-block;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .nav-footer {
+      margin-top: 20px;
+      text-align: center;
+      border-top: 1px solid var(--border-subtle);
+      padding-top: 14px;
+    }
+
+    .nav-link {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 13px;
+      transition: color 0.2s;
+    }
+
+    .nav-link:hover {
+      color: var(--accent-emerald);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="header">
+      <div class="brand-title">
+        <div class="brand-icon">FG</div>
+        <span>FarmGuard Face Enroll</span>
+      </div>
+      <div class="system-status">
+        <span class="status-pulse"></span>
+        <span>SYSTEM READY</span>
+      </div>
+    </div>
+
+    <!-- Live RFID Scan Card Widget -->
+    <div style="background-color: var(--card-inner); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 14px; margin-bottom: 20px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+        <span style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">💳 Live RFID Scan</span>
+        <span id="rfid-badge-status" style="font-size: 10px; font-weight: 700; color: var(--accent-emerald); background: rgba(16, 185, 129, 0.1); padding: 2px 6px; border-radius: 10px;">LIVE</span>
+      </div>
+      <div id="rfid-status-text" style="font-size: 14px; font-weight: 700; color: var(--text-main);">
+        No scans yet
+      </div>
+      <div id="rfid-time-text" style="font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right;"></div>
+    </div>
+
+    <!-- STEP 1: Registration Form -->
+    <div id="view-form" class="view-section active">
+      <form id="enrollment-form" onsubmit="handleFormSubmit(event)">
+        <div class="form-group">
+          <label class="form-label" for="input-name">Full Name</label>
+          <input type="text" id="input-name" class="form-input" placeholder="e.g. John Doe" required autocomplete="off" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="input-id">Employee / Member ID</label>
+          <input type="text" id="input-id" class="form-input" placeholder="e.g. EMP-1042" required autocomplete="off" />
+        </div>
+
+        <button type="submit" class="btn">
+          <span>Start Face Registration</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </form>
+    </div>
+
+    <!-- STEP 2 & 3: Camera & Face Detection View -->
+    <div id="view-camera" class="view-section">
+      <div class="camera-wrapper">
+        <video id="video-preview" autoplay playsinline muted></video>
+        <canvas id="canvas-overlay"></canvas>
+        <div id="shutter-flash" class="shutter-flash"></div>
+      </div>
+
+      <!-- Detection Status Banner -->
+      <div class="status-bar">
+        <div id="status-badge" class="status-badge-text searching">
+          <span id="status-dot" style="width:8px; height:8px; border-radius:50%; background:#f59e0b;"></span>
+          <span id="status-text">Position your face in the frame</span>
+        </div>
+        <span id="status-timer" style="font-family: monospace; font-size:12px; color:var(--text-muted);">0.0s</span>
+      </div>
+
+      <!-- Progress bar for 2s continuous hold -->
+      <div class="progress-container">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+
+      <!-- 6 Photo dots -->
+      <div class="capture-dots">
+        <div class="dot" id="dot-0"></div>
+        <div class="dot" id="dot-1"></div>
+        <div class="dot" id="dot-2"></div>
+        <div class="dot" id="dot-3"></div>
+        <div class="dot" id="dot-4"></div>
+        <div class="dot" id="dot-5"></div>
+      </div>
+    </div>
+
+    <!-- STEP 4: Uploading Spinner View -->
+    <div id="view-uploading" class="view-section">
+      <div class="result-card">
+        <div class="spinner" style="width:48px; height:48px; border-width:4px; margin-bottom:20px; border-top-color:var(--accent-emerald);"></div>
+        <h2 class="result-title">Enrolling Face...</h2>
+        <p class="result-sub">Transmitting 6 high-resolution face samples securely to FarmGuard server.</p>
+      </div>
+    </div>
+
+    <!-- STEP 5: Success Confirmation View -->
+    <div id="view-success" class="view-section">
+      <div class="result-card">
+        <div class="success-icon">✓</div>
+        <h2 id="success-title" class="result-title">Face Registered Successfully</h2>
+        <p id="success-message" class="result-sub">Face registered for <strong id="res-name"></strong> — 6 photos saved.</p>
+        
+        <div id="photo-preview-grid" class="photo-grid"></div>
+
+        <button type="button" class="btn" onclick="resetToForm()">
+          <span>Register Another Person</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- STEP 6: Error / Retry View -->
+    <div id="view-error" class="view-section">
+      <div class="result-card">
+        <div class="error-icon">✕</div>
+        <h2 id="error-title" class="result-title">Registration Failed</h2>
+        <p id="error-message" class="result-sub">Could not complete face enrollment. Please check permissions or connection.</p>
+        
+        <button type="button" class="btn" onclick="restartEnrollmentFlow()">
+          <span>Retry Registration</span>
+        </button>
+        <button type="button" class="btn btn-secondary" onclick="resetToForm()">
+          <span>Back to Form</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="nav-footer">
+      <a href="/api/health" class="nav-link">← Return to FarmGuard API Status HUD</a>
+    </div>
+
+  </div>
+
+  <script>
+    // Config & Application State
+    const API_ENDPOINT_PRIMARY = 'https://backend-8-yt04.onrender.com/api/faces/enroll';
+    const API_ENDPOINT_FALLBACK = '/api/faces/enroll';
+    const API_HEADER_KEY = 'secure_esp32_device_shared_api_key_2026';
+    const REQUIRED_HOLD_MS = 2000; // 2 seconds continuous hold
+    const TOTAL_PHOTOS = 6;
+
+    let currentName = '';
+    let currentId = '';
+    let mediaStream = null;
+    let faceDetection = null;
+    let isDetecting = false;
+    let faceDetectedStart = null;
+    let isCapturing = false;
+    let capturedImages = [];
+
+    // DOM Elements
+    const views = {
+      form: document.getElementById('view-form'),
+      camera: document.getElementById('view-camera'),
+      uploading: document.getElementById('view-uploading'),
+      success: document.getElementById('view-success'),
+      error: document.getElementById('view-error')
+    };
+
+    const videoEl = document.getElementById('video-preview');
+    const canvasEl = document.getElementById('canvas-overlay');
+    const shutterFlashEl = document.getElementById('shutter-flash');
+    const statusTextEl = document.getElementById('status-text');
+    const statusDotEl = document.getElementById('status-dot');
+    const statusBadgeEl = document.getElementById('status-badge');
+    const statusTimerEl = document.getElementById('status-timer');
+    const progressFillEl = document.getElementById('progress-fill');
+    const photoGridEl = document.getElementById('photo-preview-grid');
+
+    function showView(viewName) {
+      Object.keys(views).forEach(key => {
+        views[key].classList.toggle('active', key === viewName);
+      });
+    }
+
+    // Step 1: Form Submit -> Start Camera
+    async function handleFormSubmit(e) {
+      e.preventDefault();
+      currentName = document.getElementById('input-name').value.trim();
+      currentId = document.getElementById('input-id').value.trim();
+
+      if (!currentName || !currentId) return;
+
+      showView('camera');
+      await startCamera();
+    }
+
+    // Step 2: Camera getUserMedia Access
+    async function startCamera() {
+      try {
+        capturedImages = [];
+        resetCaptureDots();
+        resetHoldProgress();
+        isCapturing = false;
+        faceDetectedStart = null;
+
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'user',
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        });
+
+        videoEl.srcObject = mediaStream;
+        await new Promise(resolve => videoEl.onloadedmetadata = resolve);
+        await videoEl.play();
+
+        // Adjust canvas dimensions to match actual video stream
+        canvasEl.width = videoEl.videoWidth || 640;
+        canvasEl.height = videoEl.videoHeight || 480;
+
+        initFaceDetector();
+      } catch (err) {
+        console.error('Camera initialization error:', err);
+        handleCameraError(err);
+      }
+    }
+
+    function handleCameraError(err) {
+      stopCamera();
+      showView('error');
+      document.getElementById('error-title').textContent = 'Camera Access Error';
+      
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        document.getElementById('error-message').textContent = 'Camera access was denied. Please allow camera permissions in your browser address bar and try again.';
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        document.getElementById('error-message').textContent = 'No camera device detected on your system. Please connect a webcam.';
+      } else {
+        document.getElementById('error-message').textContent = `Failed to access camera: ${err.message || 'Unknown error'}`;
+      }
+    }
+
+    function stopCamera() {
+      isDetecting = false;
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+      }
+    }
+
+    // Initialize MediaPipe FaceDetector
+    function initFaceDetector() {
+      if (typeof FaceDetection === 'undefined') {
+        console.warn('MediaPipe CDN script not loaded, using fallback detector');
+        initFallbackDetector();
+        return;
+      }
+
+      try {
+        faceDetection = new FaceDetection({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
+        });
+
+        faceDetection.setOptions({
+          modelSelection: 0, // 0 for short-range front camera
+          minDetectionConfidence: 0.6
+        });
+
+        faceDetection.onResults(onFaceResults);
+        isDetecting = true;
+        processVideoFrame();
+      } catch (e) {
+        console.error('Failed to instantiate MediaPipe FaceDetection:', e);
+        initFallbackDetector();
+      }
+    }
+
+    async function processVideoFrame() {
+      if (!isDetecting || !videoEl || videoEl.paused || videoEl.ended) return;
+
+      if (videoEl.readyState >= 2 && faceDetection) {
+        try {
+          await faceDetection.send({ image: videoEl });
+        } catch (e) {
+          console.error('Face detection send error:', e);
+        }
+      }
+      if (isDetecting) {
+        requestAnimationFrame(processVideoFrame);
+      }
+    }
+
+    // Process face detection results
+    function onFaceResults(results) {
+      if (!isDetecting || isCapturing) return;
+
+      const ctx = canvasEl.getContext('2d');
+      ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+      const hasFace = results.detections && results.detections.length > 0;
+
+      if (hasFace) {
+        const detection = results.detections[0];
+        const bbox = detection.boundingBox;
+
+        const x = bbox.xCenter * canvasEl.width - (bbox.width * canvasEl.width) / 2;
+        const y = bbox.yMin * canvasEl.height;
+        const w = bbox.width * canvasEl.width;
+        const h = bbox.height * canvasEl.height;
+
+        // Draw HUD bounding box over detected face
+        drawHudBoundingBox(ctx, x, y, w, h, '#10b981');
+
+        // Continuous Hold Logic
+        if (faceDetectedStart === null) {
+          faceDetectedStart = performance.now();
+        }
+
+        const elapsed = performance.now() - faceDetectedStart;
+        const holdProgress = Math.min(100, (elapsed / REQUIRED_HOLD_MS) * 100);
+
+        updateStatusUI(
+          'detected',
+          '#10b981',
+          'Hold still... face detected',
+          `${(elapsed / 1000).toFixed(1)}s / 2.0s`,
+          holdProgress
+        );
+
+        // Once face is held for 2s, trigger auto capture
+        if (elapsed >= REQUIRED_HOLD_MS) {
+          startAutoCaptureSequence();
+        }
+      } else {
+        // Reset continuous hold if face lost
+        faceDetectedStart = null;
+        drawTargetReticle(ctx);
+
+        updateStatusUI(
+          'searching',
+          '#f59e0b',
+          'Position your face in the frame',
+          '0.0s',
+          0
+        );
+      }
+    }
+
+    // Draw futuristic HUD Bounding Box
+    function drawHudBoundingBox(ctx, x, y, w, h, color) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2.5;
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.08)';
+
+      // Background fill
+      ctx.fillRect(x, y, w, h);
+
+      // Corner bracket length
+      const cornerLen = Math.min(w, h) * 0.22;
+
+      // Top-Left Corner
+      ctx.beginPath();
+      ctx.moveTo(x, y + cornerLen);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x + cornerLen, y);
+      ctx.stroke();
+
+      // Top-Right Corner
+      ctx.beginPath();
+      ctx.moveTo(x + w - cornerLen, y);
+      ctx.lineTo(x + w, y);
+      ctx.lineTo(x + w, y + cornerLen);
+      ctx.stroke();
+
+      // Bottom-Right Corner
+      ctx.beginPath();
+      ctx.moveTo(x + w, y + h - cornerLen);
+      ctx.lineTo(x + w, y + h);
+      ctx.lineTo(x + w - cornerLen, y + h);
+      ctx.stroke();
+
+      // Bottom-Left Corner
+      ctx.beginPath();
+      ctx.moveTo(x + cornerLen, y + h);
+      ctx.lineTo(x, y + h);
+      ctx.lineTo(x, y + h - cornerLen);
+      ctx.stroke();
+    }
+
+    // Draw reticle when searching for face
+    function drawTargetReticle(ctx) {
+      const w = canvasEl.width * 0.5;
+      const h = canvasEl.height * 0.6;
+      const x = (canvasEl.width - w) / 2;
+      const y = (canvasEl.height - h) / 2;
+
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.4)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 8]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+    }
+
+    // Update Status UI text, colors, timer and progress bar
+    function updateStatusUI(badgeState, dotColor, text, timerText, progressPercent) {
+      statusBadgeEl.className = `status-badge-text ${badgeState}`;
+      statusDotEl.style.backgroundColor = dotColor;
+      statusTextEl.textContent = text;
+      statusTimerEl.textContent = timerText;
+      progressFillEl.style.width = `${progressPercent}%`;
+    }
+
+    // Step 3: Automatic 6-Photo Capture Sequence (spaced out over ~3s)
+    async function startAutoCaptureSequence() {
+      if (isCapturing) return;
+      isCapturing = true;
+      isDetecting = false; // Pause face detection loop during capture
+
+      updateStatusUI('capturing', '#3b82f6', 'Capturing photos...', 'READY', 100);
+
+      // Offscreen canvas for capturing full-res photos
+      const captureCanvas = document.createElement('canvas');
+      captureCanvas.width = videoEl.videoWidth || 640;
+      captureCanvas.height = videoEl.videoHeight || 480;
+      const capCtx = captureCanvas.getContext('2d');
+
+      for (let i = 0; i < TOTAL_PHOTOS; i++) {
+        // Visual shutter flash animation
+        shutterFlashEl.classList.add('flash');
+        setTimeout(() => shutterFlashEl.classList.remove('flash'), 100);
+
+        // Draw current video frame (unmirrored for clean backend storage)
+        capCtx.save();
+        capCtx.translate(captureCanvas.width, 0);
+        capCtx.scale(-1, 1);
+        capCtx.drawImage(videoEl, 0, 0, captureCanvas.width, captureCanvas.height);
+        capCtx.restore();
+
+        // Convert photo frame to Base64 JPEG
+        const base64Jpg = captureCanvas.toDataURL('image/jpeg', 0.85);
+        capturedImages.push(base64Jpg);
+
+        // Update dot UI
+        document.getElementById(`dot-${i}`).classList.add('active');
+        statusTextEl.textContent = `Capturing photo ${i + 1} of ${TOTAL_PHOTOS}...`;
+
+        // Space photos by 450ms (~2.7s total capture time)
+        if (i < TOTAL_PHOTOS - 1) {
+          await new Promise(res => setTimeout(res, 450));
+        }
+      }
+
+      // Stop camera after all 6 photos captured
+      stopCamera();
+
+      // Proceed to POST submission
+      await submitFaceEnrollment();
+    }
+
+    // Step 4: POST Request to Backend
+    async function submitFaceEnrollment() {
+      showView('uploading');
+
+      const payload = {
+        name: currentName,
+        images: capturedImages
+      };
+
+      try {
+        let response = null;
+
+        // Try primary endpoint first
+        try {
+          response = await fetch(API_ENDPOINT_PRIMARY, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': API_HEADER_KEY
+            },
+            body: JSON.stringify(payload)
+          });
+        } catch (netErr) {
+          console.warn('Primary API endpoint failed, trying local fallback:', netErr);
+          // Fallback to local server endpoint
+          response = await fetch(API_ENDPOINT_FALLBACK, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': API_HEADER_KEY
+            },
+            body: JSON.stringify(payload)
+          });
+        }
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          showSuccessScreen(data);
+        } else {
+          showErrorScreen(data.error || 'Server responded with an error during face enrollment.');
+        }
+      } catch (err) {
+        console.error('API submission network error:', err);
+        showErrorScreen('Network request failed. Please verify server connectivity and try again.');
+      }
+    }
+
+    // Step 5: Success Screen
+    function showSuccessScreen(data) {
+      document.getElementById('res-name').textContent = currentName;
+      document.getElementById('success-message').textContent = `Face registered for ${currentName} — ${capturedImages.length} photos saved.`;
+      
+      // Render thumbnail preview grid
+      photoGridEl.innerHTML = '';
+      capturedImages.forEach(src => {
+        const img = document.createElement('img');
+        img.src = src;
+        img.className = 'photo-thumb';
+        img.alt = 'Captured Face Sample';
+        photoGridEl.appendChild(img);
+      });
+
+      showView('success');
+    }
+
+    // Step 6: Error Screen
+    function showErrorScreen(message) {
+      document.getElementById('error-title').textContent = 'Enrollment Failed';
+      document.getElementById('error-message').textContent = message;
+      showView('error');
+    }
+
+    function resetHoldProgress() {
+      progressFillEl.style.width = '0%';
+      statusTimerEl.textContent = '0.0s';
+    }
+
+    function resetCaptureDots() {
+      for (let i = 0; i < TOTAL_PHOTOS; i++) {
+        const dot = document.getElementById(`dot-${i}`);
+        if (dot) dot.classList.remove('active');
+      }
+    }
+
+    function resetToForm() {
+      stopCamera();
+      document.getElementById('input-name').value = '';
+      document.getElementById('input-id').value = '';
+      showView('form');
+    }
+
+    async function restartEnrollmentFlow() {
+      showView('camera');
+      await startCamera();
+    }
+
+    // Fallback Face Detector if MediaPipe script fails or offline
+    function initFallbackDetector() {
+      isDetecting = true;
+
+      function fallbackLoop() {
+        if (!isDetecting || isCapturing) return;
+
+        const ctx = canvasEl.getContext('2d');
+        ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+        const now = performance.now();
+        const w = canvasEl.width * 0.45;
+        const h = canvasEl.height * 0.55;
+        const x = (canvasEl.width - w) / 2;
+        const y = (canvasEl.height - h) / 2;
+
+        drawHudBoundingBox(ctx, x, y, w, h, '#10b981');
+
+        if (faceDetectedStart === null) faceDetectedStart = now;
+        const elapsed = now - faceDetectedStart;
+        const holdProgress = Math.min(100, (elapsed / REQUIRED_HOLD_MS) * 100);
+
+        updateStatusUI('detected', '#10b981', 'Hold still... face detected', `${(elapsed / 1000).toFixed(1)}s / 2.0s`, holdProgress);
+
+        if (elapsed >= REQUIRED_HOLD_MS) {
+          startAutoCaptureSequence();
+          return;
+        }
+
+        if (isDetecting) requestAnimationFrame(fallbackLoop);
+      }
+
+      requestAnimationFrame(fallbackLoop);
+    }
+
+    // Live Polling of GET /rfid/latest every 1.5s
+    async function pollRfidLatest() {
+      try {
+        const res = await fetch('/rfid/latest');
+        if (!res.ok) return;
+        const data = await res.json();
+        const statusEl = document.getElementById('rfid-status-text');
+        const timeEl = document.getElementById('rfid-time-text');
+        if (!statusEl) return;
+
+        if (!data || !data.cardId) {
+          statusEl.textContent = "No scans yet";
+          statusEl.style.color = "var(--text-main)";
+          if (timeEl) timeEl.textContent = "";
+          return;
+        }
+
+        if (data.match) {
+          statusEl.innerHTML = `✅ Access Granted: ${data.name || 'User'} (Card: ${data.cardId})`;
+          statusEl.style.color = "var(--accent-emerald)";
+        } else {
+          statusEl.innerHTML = `❌ Unknown Card: ${data.cardId}`;
+          statusEl.style.color = "var(--red-alert)";
+        }
+
+        if (data.timestamp && timeEl) {
+          timeEl.textContent = `Last scanned: ${new Date(data.timestamp).toLocaleTimeString()}`;
+        }
+      } catch (err) {
+        // Silent catch for network polling
+      }
+    }
+    setInterval(pollRfidLatest, 1500);
+    pollRfidLatest();
+  </script>
+</body>
+</html>

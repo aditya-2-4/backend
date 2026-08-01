@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FarmGuard — Smart Security Dashboard</title>
+  <style>
+    :root {
+      --bg-dark: #0a0a0a;
+      --card-bg: #121212;
+      --card-inner: #1a1a1a;
+      --border-color: #2e854e;
+      --border-subtle: #2a2a2a;
+      --accent-emerald: #10b981;
+      --accent-green: #2e854e;
+      --red-alert: #ef4444;
+      --text-main: #f0f6fc;
+      --text-muted: #8b949e;
+      --radius: 12px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 540px;
+      background-color: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      box-shadow: 0 12px 40px rgba(16, 185, 129, 0.12), 0 4px 12px rgba(0, 0, 0, 0.8);
+      padding: 28px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 16px;
+    }
+
+    .brand-title {
+      font-size: 20px;
+      font-weight: 800;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-icon {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, #10b981, #2e854e);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 14px;
+      color: #ffffff;
+    }
+
+    .system-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--accent-emerald);
+      background-color: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      padding: 4px 10px;
+      border-radius: 20px;
+      text-transform: uppercase;
+    }
+
+    .status-pulse {
+      width: 7px;
+      height: 7px;
+      background-color: var(--accent-emerald);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--accent-emerald);
+      animation: pulse-ring 1.5s infinite;
+    }
+
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+      70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+    /* Arm / Disarm System Toggle Button Widget */
+    .arm-card {
+      background-color: var(--card-inner);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    .arm-btn {
+      width: 100%;
+      padding: 16px;
+      font-size: 15px;
+      font-weight: 800;
+      color: #ffffff;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+
+    .arm-btn.armed {
+      background-color: #10b981;
+      box-shadow: 0 4px 16px rgba(16, 185, 129, 0.3);
+    }
+
+    .arm-btn.armed:hover {
+      background-color: #059669;
+    }
+
+    .arm-btn.disarmed {
+      background-color: #ef4444;
+      box-shadow: 0 4px 16px rgba(239, 68, 68, 0.35);
+    }
+
+    .arm-btn.disarmed:hover {
+      background-color: #dc2626;
+    }
+
+    /* Live RFID Status Card */
+    .rfid-card {
+      background-color: var(--card-inner);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+      transition: all 0.3s ease;
+    }
+
+    .rfid-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .rfid-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .rfid-badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background-color: rgba(255, 255, 255, 0.05);
+      color: var(--text-muted);
+    }
+
+    .rfid-result-box {
+      font-size: 16px;
+      font-weight: 700;
+      padding: 14px;
+      border-radius: 8px;
+      background-color: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      word-break: break-word;
+    }
+
+    .rfid-result-box.granted {
+      background-color: rgba(16, 185, 129, 0.12);
+      border-color: rgba(16, 185, 129, 0.35);
+      color: var(--accent-emerald);
+    }
+
+    .rfid-result-box.denied {
+      background-color: rgba(239, 68, 68, 0.12);
+      border-color: rgba(239, 68, 68, 0.35);
+      color: var(--red-alert);
+    }
+
+    .rfid-timestamp {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 8px;
+      text-align: right;
+    }
+
+    .btn-link {
+      display: block;
+      width: 100%;
+      text-align: center;
+      background-color: var(--accent-green);
+      color: #ffffff;
+      text-decoration: none;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      transition: background-color 0.2s;
+    }
+
+    .btn-link:hover {
+      background-color: #3fa364;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="header">
+      <div class="brand-title">
+        <div class="brand-icon">FG</div>
+        <span>FarmGuard Security Dashboard</span>
+      </div>
+      <div class="system-status">
+        <span class="status-pulse"></span>
+        <span id="connStatusText">ONLINE</span>
+      </div>
+    </div>
+
+    <!-- System Armed / Disarmed Toggle Control Card -->
+    <div class="arm-card">
+      <button id="armToggleBtn" class="arm-btn armed" onclick="toggleArmState()">
+        🛡️ SYSTEM ARMED (CLICK TO DISARM)
+      </button>
+    </div>
+
+    <!-- RFID Scanner Live Status Card -->
+    <div class="rfid-card">
+      <div class="rfid-card-header">
+        <div class="rfid-label">
+          <span>💳</span>
+          <span>Latest RFID Scan Result</span>
+        </div>
+        <div class="rfid-badge" id="rfidPulse">POLLING</div>
+      </div>
+
+      <div id="rfidStatus" class="rfid-result-box">
+        No scans yet
+      </div>
+
+      <div id="rfidTimestamp" class="rfid-timestamp"></div>
+    </div>
+
+    <a href="/enroll" class="btn-link">📷 Open Face Enrollment Portal →</a>
+  </div>
+
+  <script>
+    let isCurrentlyArmed = true;
+
+    // Fetch device status on load
+    async function fetchDeviceStatus() {
+      try {
+        const res = await fetch('/api/device/status?api_key=secure_esp32_device_shared_api_key_2026');
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        if (data) {
+          isCurrentlyArmed = data.is_armed !== undefined ? Boolean(data.is_armed) : true;
+          updateArmButtonUI(isCurrentlyArmed);
+        }
+      } catch (err) {
+        console.error("Error fetching device status:", err);
+      }
+    }
+
+    // Toggle Arm/Disarm System State
+    async function toggleArmState() {
+      const btn = document.getElementById('armToggleBtn');
+      btn.disabled = true;
+      btn.textContent = "UPDATING...";
+
+      try {
+        const nextState = !isCurrentlyArmed;
+        const res = await fetch('/api/device/arm-toggle', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': 'secure_esp32_device_shared_api_key_2026'
+          },
+          body: JSON.stringify({ is_armed: nextState })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          isCurrentlyArmed = data.is_armed !== undefined ? Boolean(data.is_armed) : nextState;
+          updateArmButtonUI(isCurrentlyArmed);
+        }
+      } catch (err) {
+        console.error("Error toggling arm state:", err);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function updateArmButtonUI(armed) {
+      const btn = document.getElementById('armToggleBtn');
+      if (!btn) return;
+
+      if (armed) {
+        btn.textContent = "🛡️ SYSTEM ARMED (CLICK TO DISARM)";
+        btn.className = "arm-btn armed";
+      } else {
+        btn.textContent = "🚨 SYSTEM DISARMED (CLICK TO ARM)";
+        btn.className = "arm-btn disarmed";
+      }
+    }
+
+    // Live Polling of GET /rfid/latest every 1.5 seconds
+    async function pollLatestRfid() {
+      try {
+        const response = await fetch('/rfid/latest');
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const statusEl = document.getElementById('rfidStatus');
+        const timeEl = document.getElementById('rfidTimestamp');
+        const pulseEl = document.getElementById('rfidPulse');
+
+        if (pulseEl) pulseEl.textContent = "LIVE";
+
+        // Case 1: Nothing has been scanned yet
+        if (!data || !data.cardId) {
+          statusEl.textContent = "No scans yet";
+          statusEl.className = "rfid-result-box";
+          if (timeEl) timeEl.textContent = "";
+          return;
+        }
+
+        // Case 2: RFID match found
+        if (data.match) {
+          statusEl.textContent = `✅ Access Granted: ${data.name || 'User'} (Card: ${data.cardId})`;
+          statusEl.className = "rfid-result-box granted";
+        } 
+        // Case 3: Unknown RFID card
+        else {
+          statusEl.textContent = `❌ Unknown Card: ${data.cardId}`;
+          statusEl.className = "rfid-result-box denied";
+        }
+
+        // Display timestamp if available
+        if (data.timestamp && timeEl) {
+          const formattedTime = new Date(data.timestamp).toLocaleTimeString();
+          timeEl.textContent = `Last scanned at ${formattedTime}`;
+        }
+      } catch (err) {
+        console.error("Error fetching /rfid/latest:", err);
+      }
+    }
+
+    // Initialize UI
+    fetchDeviceStatus();
+    setInterval(pollLatestRfid, 1500);
+    pollLatestRfid();
+  </script>
+
+</body>
+</html>

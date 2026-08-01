@@ -11,7 +11,7 @@ import numpy as np
 from ultralytics import YOLO
 import gradio as gr
 
-# Safe decorator fallback for ZeroGPU vs CPU Basic spaces
+# Try importing spaces for ZeroGPU Spaces fallback
 try:
     import spaces
     gpu_decorator = spaces.GPU
@@ -25,12 +25,14 @@ logger = logging.getLogger("farmguard-ai-hf")
 
 SHARED_API_KEY = os.getenv("SHARED_API_KEY", "secure_esp32_device_shared_api_key_2026")
 BACKEND_EVENT_URL = os.getenv("BACKEND_EVENT_URL", "https://backend-8-yt04.onrender.com/api/device/event")
+BACKEND_FRAME_URL = os.getenv("BACKEND_FRAME_URL", "https://backend-8-yt04.onrender.com/latest-frame")
 
 # Load YOLO model once at startup
 logger.info("Initializing high-accuracy YOLO model (yolo11n.pt)...")
 model = YOLO("yolo11n.pt")
 logger.info("YOLO model loaded successfully.")
 
+# Global storage for latest annotated camera frame
 latest_annotated_frame = None
 
 HIGH_CONFIDENCE_CLASSES = {"person", "cow", "dog", "cat", "horse", "sheep", "Human", "Cow / Cattle"}
@@ -40,6 +42,7 @@ LABEL_MAPPINGS = {
     "cow": "Cow / Cattle",
 }
 
+# Full COCO 80 categories fallback dictionary
 COCO_80_CLASSES = {
     "person": "Human",
     "bicycle": "Bicycle",
@@ -123,9 +126,54 @@ COCO_80_CLASSES = {
     "toothbrush": "Toothbrush"
 }
 
-def process_detection(image):
+def enhance_camera_frame(image):
+    if image is None:
+        return None
+    try:
+        # Automatic Adaptive Histogram Equalization for Low-Light Camera Footage Enhancement
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        cl = clahe.apply(l_channel)
+        enhanced_lab = cv2.merge((cl, a_channel, b_channel))
+        return cv2.cvtColor(enhanced_lab, cv2.COLOR_LAB2BGR)
+    except Exception:
+        return image
+
+@gpu_decorator
+def detect_objects_api(input_image, api_key: str = ""):
     global latest_annotated_frame
+
+    if api_key and api_key != SHARED_API_KEY:
+        return {"error": "Unauthorized device key access"}, None
+
+    if input_image is None:
+        return {"error": "No image payload provided"}, None
+
+    # Handle image format input (numpy array, string path, bytes, or bytearray)
+    if isinstance(input_image, str):
+        image = cv2.imread(input_image)
+    elif isinstance(input_image, np.ndarray):
+        image = cv2.cvtColor(input_image, cv2.COLOR_RGB2BGR)
+    elif isinstance(input_image, (bytes, bytearray)):
+        np_arr = np.frombuffer(input_image, np.uint8)
+        image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    else:
+        try:
+            np_arr = np.frombuffer(bytes(input_image), np.uint8)
+            image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        except Exception:
+            image = None
+
+    if image is None:
+        return {"error": "Invalid JPEG image payload"}, None
+
+    # Enhance low-light camera footage for higher clarity
+    image = enhance_camera_frame(image)
+
+    # Run YOLO detection across all 80 object categories
     results = model(image, conf=0.35, iou=0.45)
+
     detections = []
     annotated_bgr = image.copy()
 
@@ -151,6 +199,7 @@ def process_detection(image):
                         "confidence_percentage": conf_pct
                     })
 
+                    # Dispatch event to Node.js backend
                     iso_timestamp = datetime.now(timezone.utc).isoformat()
                     event_payload = {
                         "detection_type": label,
@@ -169,54 +218,45 @@ def process_detection(image):
                     except Exception as e:
                         logger.error(f"Failed to post detection event to backend: {e}")
 
+    # Convert annotated frame back to RGB for Gradio UI display
     annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
     latest_annotated_frame = annotated_rgb
-    return detections, annotated_rgb
 
-@gpu_decorator
-def predict_gradio(input_image, api_key: str = ""):
-    if api_key and api_key != SHARED_API_KEY:
-        return {"error": "Unauthorized device key access"}, None
-
-    if input_image is None:
-        return {"error": "No image payload provided"}, None
-
-    if isinstance(input_image, str):
-        image = cv2.imread(input_image)
-    elif isinstance(input_image, np.ndarray):
-        image = cv2.cvtColor(input_image, cv2.COLOR_RGB2BGR)
-    else:
-        np_arr = np.frombuffer(input_image, np.uint8)
-        image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
-    if image is None:
-        return {"error": "Invalid JPEG image payload"}, None
-
-    detections, annotated_rgb = process_detection(image)
     return {"total_detected": len(detections), "detections": detections}, annotated_rgb
 
 def get_latest_frame():
     global latest_annotated_frame
-    if latest_annotated_frame is None:
-        img = np.zeros((480, 640, 3), dtype=np.uint8)
-        img[:] = (20, 26, 18)
-        cv2.putText(img, "FARMGUARD AI - WAITING FOR CAMERA FEED", (60, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (16, 185, 129), 2)
-        return img
-    return latest_annotated_frame
+    
+    # Try fetching latest raw frame from Render backend if memory buffer is empty or needs refresh
+    try:
+        resp = requests.get(BACKEND_FRAME_URL, timeout=3)
+        if resp.status_code == 200 and len(resp.content) > 0:
+            np_arr = np.frombuffer(resp.content, np.uint8)
+            img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            if img_bgr is not None:
+                img_bgr = enhance_camera_frame(img_bgr)
+                results = model(img_bgr, conf=0.35)
+                annotated_bgr = img_bgr.copy()
+                if len(results) > 0:
+                    annotated_bgr = results[0].plot(conf=True, line_width=2)
+                annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
+                latest_annotated_frame = annotated_rgb
+                return annotated_rgb
+    except Exception as e:
+        logger.error(f"Failed to fetch live frame from backend: {e}")
 
-custom_theme = gr.themes.Soft(
-    primary_hue="emerald",
-    neutral_hue="slate",
-).set(
-    body_background_fill="#0a0f0d",
-    block_background_fill="#121a16",
-    block_border_color="#1e2d24",
-)
+    if latest_annotated_frame is not None:
+        return latest_annotated_frame
+
+    img = np.zeros((480, 640, 3), dtype=np.uint8)
+    img[:] = (20, 26, 18)
+    cv2.putText(img, "FARMGUARD AI - WAITING FOR CAMERA FEED", (60, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (16, 185, 129), 2)
+    return img
 
 with gr.Blocks() as demo:
     gr.Markdown("""
     # 🛡️ FarmGuard High-Accuracy AI Detection Service
-    ### High-Performance 104GB RAM Microservice
+    ### Precision 80 Category Object, Wild Animal, Human & Electronics Detection
     """)
 
     with gr.Tabs():
@@ -237,10 +277,20 @@ with gr.Blocks() as demo:
                     annotated_output = gr.Image(label="Annotated Image Output")
 
             detect_btn.click(
-                fn=predict_gradio,
+                fn=detect_objects_api,
                 inputs=[test_input, api_key_input],
                 outputs=[json_output, annotated_output],
                 api_name="predict"
             )
 
-demo.queue().launch(theme=custom_theme)
+        with gr.TabItem("📋 Supported 80 Categories"):
+            gr.Markdown("""
+            ### 🎯 80 High-Precision Categories & Animals:
+            - 👨🌾 **Humans**: Person -> mapped to `Human`
+            - 🐂 **Livestock & Wild Animals**: Cow -> mapped to `Cow / Cattle`, Sheep, Horse, Elephant, Bear, Dog, Cat, Bird, Zebra, Giraffe
+            - 💻 **Electronics**: Mobile Phone, Computer Mouse, Laptop, TV/Monitor, Keyboard, Remote Control, Microwave, Oven, Toaster, Clock
+            - 🚗 **Vehicles**: Car, Truck, Bus, Motorcycle, Bicycle, Train, Boat
+            """)
+
+if __name__ == "__main__":
+    demo.queue().launch()

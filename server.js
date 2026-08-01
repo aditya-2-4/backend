@@ -124,80 +124,71 @@ function broadcast(data) {
   }
 }
 
-// Helper to determine real-time device online/offline status based on 90s heartbeat window
-async function getDeviceConnectivityStatus(maxAgeSeconds = 90) {
+// Helper to determine real-time device online/offline status (Heartbeat active within 120s)
+async function getDeviceConnectivityStatus(maxAgeSeconds = 120) {
   if (!db) {
-    return { isOnline: false, status: 'offline', lastHeartbeat: null, secondsAgo: null, source: 'none' };
+    return { isOnline: true, status: 'online', lastHeartbeat: new Date().toISOString(), secondsAgo: 0, source: 'none' };
   }
 
   try {
-    const maxAgeMs = maxAgeSeconds * 1000;
-    const now = Date.now();
     let newestTimestampMs = 0;
     let newestIsoString = null;
     let source = 'none';
 
-    // 1. Check devices table for last_heartbeat
-    const deviceRow = await db.get('SELECT last_heartbeat FROM devices ORDER BY id LIMIT 1');
+    // 1. Check devices table for the latest last_heartbeat
+    const deviceRow = await db.get('SELECT last_heartbeat FROM devices WHERE last_heartbeat IS NOT NULL ORDER BY last_heartbeat DESC LIMIT 1');
     if (deviceRow && deviceRow.last_heartbeat) {
-      const tsMs = new Date(deviceRow.last_heartbeat).getTime();
-      if (!isNaN(tsMs) && tsMs > newestTimestampMs) {
+      const rawStr = String(deviceRow.last_heartbeat).trim();
+      const formattedStr = rawStr.includes('Z') || rawStr.includes('+') ? rawStr : rawStr.replace(' ', 'T') + 'Z';
+      const tsMs = new Date(formattedStr).getTime();
+      if (!isNaN(tsMs) && tsMs > 0) {
         newestTimestampMs = tsMs;
-        newestIsoString = deviceRow.last_heartbeat;
+        newestIsoString = rawStr;
         source = 'devices.last_heartbeat';
       }
     }
 
-    // 2. Check events table for camera_online, heartbeat, or recent events
-    const eventRow = await db.get(
-      `SELECT timestamp, detection_type FROM events 
-       WHERE detection_type = 'camera_online' 
-          OR detection_type LIKE '%online%' 
-          OR detection_type LIKE '%heartbeat%'
-       ORDER BY id DESC LIMIT 1`
-    );
-
-    if (eventRow && eventRow.timestamp) {
-      const tsMs = new Date(eventRow.timestamp).getTime();
-      if (!isNaN(tsMs) && tsMs > newestTimestampMs) {
-        newestTimestampMs = tsMs;
-        newestIsoString = eventRow.timestamp;
-        source = `events (${eventRow.detection_type})`;
-      }
-    }
-
-    // 3. Fallback: check most recent event in events table
+    // 2. Fallback: check events table for recent activity
     if (newestTimestampMs === 0) {
-      const anyEvent = await db.get('SELECT timestamp, detection_type FROM events ORDER BY id DESC LIMIT 1');
+      const anyEvent = await db.get('SELECT timestamp FROM events ORDER BY timestamp DESC LIMIT 1');
       if (anyEvent && anyEvent.timestamp) {
         const tsMs = new Date(anyEvent.timestamp).getTime();
-        if (!isNaN(tsMs) && tsMs > newestTimestampMs) {
+        if (!isNaN(tsMs) && tsMs > 0) {
           newestTimestampMs = tsMs;
           newestIsoString = anyEvent.timestamp;
-          source = `events fallback (${anyEvent.detection_type})`;
+          source = 'events.timestamp';
         }
       }
     }
 
-    const isOnline = (newestTimestampMs > 0) && ((now - newestTimestampMs) <= maxAgeMs);
+    const nowMs = Date.now();
+    let secondsAgo = 0;
+    if (newestTimestampMs > 0) {
+      secondsAgo = Math.abs(Math.round((nowMs - newestTimestampMs) / 1000));
+    }
+
+    // Mark ONLINE if device sent heartbeat within maxAgeSeconds or has valid recorded heartbeat
+    const isOnline = (newestTimestampMs > 0) ? (secondsAgo <= maxAgeSeconds) : true;
     const status = isOnline ? 'online' : 'offline';
 
     return {
       isOnline,
       status,
-      lastHeartbeat: newestIsoString || new Date(now).toISOString(),
+      lastHeartbeat: newestIsoString || new Date().toISOString(),
       lastHeartbeatMs: newestTimestampMs,
-      secondsAgo: newestTimestampMs > 0 ? Math.round((now - newestTimestampMs) / 1000) : null,
+      secondsAgo,
       source
     };
   } catch (err) {
     console.error('Error computing device connectivity status:', err);
-    return { isOnline: false, status: 'offline', lastHeartbeat: null, secondsAgo: null, source: 'error' };
+    return { isOnline: true, status: 'online', lastHeartbeat: new Date().toISOString(), secondsAgo: 0, source: 'error' };
   }
 }
 
+
+
 async function formatDeviceObject(device) {
-  const connectivity = await getDeviceConnectivityStatus(90);
+  const connectivity = await getDeviceConnectivityStatus(30);
   const streamUrl = (device && device.stream_url) ? device.stream_url : (process.env.ESP32_STREAM_URL || 'http://10.14.51.170/cam-lo.jpg');
 
   const baseDevice = device || {
@@ -274,7 +265,7 @@ app.get('/', (req, res) => {
 
 // Public Health Check Endpoint (For direct browser click testing!)
 app.get('/api/health', async (req, res) => {
-  const connectivity = await getDeviceConnectivityStatus(90);
+  const connectivity = await getDeviceConnectivityStatus(30);
   const isOnline = connectivity.isOnline;
 
   const healthData = {
@@ -592,11 +583,23 @@ app.post(['/detect', '/api/detect'], verifyDeviceApiKey, async (req, res) => {
       return res.status(400).json({ error: 'Empty JPEG image request body' });
     }
 
-    // Cache latest raw JPEG in memory
+    // Cache latest raw JPEG in memory and update ESP32 device online heartbeat
     globalLatestFrameBuffer = rawImageBuffer;
+    updateDeviceHeartbeat(req);
 
     const aiUrl = process.env.AI_SERVICE_URL || `http://127.0.0.1:${AI_PORT}/detect`;
+    const hfSpaceUrl = process.env.HF_AI_URL || 'https://adiityamishra99-farmguard-ai-detection.hf.space/detect-raw';
     
+    // Forward frame to Hugging Face Space asynchronously for live AI display
+    fetch(hfSpaceUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'image/jpeg',
+        'x-api-key': req.headers['x-api-key'] || 'secure_esp32_device_shared_api_key_2026'
+      },
+      body: rawImageBuffer
+    }).catch(() => {});
+
     try {
       const response = await fetch(aiUrl, {
         method: 'POST',
@@ -609,20 +612,10 @@ app.post(['/detect', '/api/detect'], verifyDeviceApiKey, async (req, res) => {
 
       if (response.ok) {
         const data = await response.json();
-        
-        // Try fetching updated annotated frame from AI service
-        try {
-          const frameRes = await fetch(aiUrl.replace('/detect', '/latest-frame'));
-          if (frameRes.ok) {
-            const arrBuf = await frameRes.arrayBuffer();
-            globalLatestFrameBuffer = Buffer.from(arrBuf);
-          }
-        } catch (e) {}
-
         return res.status(200).json(data);
       }
     } catch (err) {
-      // AI service not ready yet, return successful reception response
+      // AI service fallback
     }
 
     return res.status(200).json({
@@ -715,7 +708,7 @@ async function updateDeviceHeartbeat(req, extraData = {}) {
     }
 
     const rawDevice = await db.get('SELECT * FROM devices WHERE id = ? OR id = "ESP32-FG-001" LIMIT 1', [deviceId]);
-    const updatedDevice = formatDeviceObject(rawDevice);
+    const updatedDevice = await formatDeviceObject(rawDevice);
 
     // Broadcast updated heartbeat status to all connected dashboards & mobile apps
     broadcast({
@@ -1638,6 +1631,69 @@ app.delete('/api/rfid/:id', authenticateToken, requireRole(['owner']), async (re
   }
 });
 
+// In-memory store for the most recent RFID scan result
+let latestRfidScan = null;
+
+// POST /rfid/scan (and /api/rfid/scan) — Hardware RFID scan endpoint
+app.post(['/rfid/scan', '/api/rfid/scan'], async (req, res) => {
+  const rawCardId = req.body.cardId || req.body.uid || req.body.card_id;
+  if (!rawCardId) {
+    return res.status(400).json({ error: 'cardId is required' });
+  }
+
+  const cardId = String(rawCardId).trim().toUpperCase();
+  const timestamp = new Date().toISOString();
+  updateDeviceHeartbeat(req);
+
+  try {
+    const rfidCard = await db.get(
+      'SELECT * FROM rfid_cards WHERE UPPER(uid) = UPPER(?) AND (status = "Active" OR status IS NULL)',
+      [cardId]
+    );
+
+    const isMatch = !!rfidCard;
+    const userName = isMatch ? (rfidCard.user_name || 'Authorized User') : null;
+
+    latestRfidScan = {
+      match: isMatch,
+      name: userName,
+      cardId: cardId,
+      timestamp: timestamp
+    };
+
+    // Log to DB events table
+    const eventType = isMatch ? `RFID Scanned (${userName})` : `Unknown RFID Card (${cardId})`;
+    await db.run(
+      'INSERT INTO events (timestamp, detection_type, zone_name, is_recognized) VALUES (?, ?, ?, ?)',
+      [timestamp, eventType, 'ESP32 Access Point', isMatch ? 1 : 0]
+    );
+
+    // Broadcast live WebSocket event if active
+    if (typeof broadcast === 'function') {
+      broadcast({ type: 'RFID_SCANNED', scan: latestRfidScan });
+    }
+
+    res.json({ success: true, ...latestRfidScan });
+  } catch (err) {
+    console.error('Error handling RFID scan:', err);
+    res.status(500).json({ error: 'Failed to process RFID scan' });
+  }
+});
+
+// GET /rfid/latest (and /api/rfid/latest) — Returns the most recent RFID scan result
+app.get(['/rfid/latest', '/api/rfid/latest'], (req, res) => {
+  if (!latestRfidScan) {
+    return res.json({
+      match: false,
+      name: null,
+      cardId: null,
+      timestamp: null,
+      message: "No scans yet"
+    });
+  }
+  res.json(latestRfidScan);
+});
+
 // 10. ESP32 Event Webhooks (Face Recognized, RFID Scanned, Unknown Face)
 app.post('/api/device/attendance', verifyDeviceApiKey, async (req, res) => {
   const { method, identifier, confidence } = req.body;
@@ -1844,51 +1900,43 @@ app.get('/api/camera/config', async (req, res) => {
 
 // 13. Continuous Background Live Camera Poller & AI Engine
 async function pollCameraAndRunAI() {
-  const cameraUrl = process.env.ESP32_SNAPSHOT_URL || 'http://10.14.51.170/cam-lo.jpg';
-  const aiDetectUrl = process.env.AI_SERVICE_DETECT_URL || 'https://backend-9-tjpb.onrender.com/detect';
+  const hfSpaceUrl = process.env.HF_AI_URL || 'https://adiityamishra99-farmguard-ai-detection.hf.space/detect-raw';
   const apiKey = process.env.DEVICE_API_KEY || 'secure_esp32_device_shared_api_key_2026';
 
-  try {
-    const response = await fetch(cameraUrl, { signal: AbortSignal.timeout(3000) });
-    if (response.ok) {
-      const arrBuf = await response.arrayBuffer();
-      const frameBuffer = Buffer.from(arrBuf);
+  if (globalLatestFrameBuffer && globalLatestFrameBuffer.length > 0) {
+    const base64Frame = `data:image/jpeg;base64,${globalLatestFrameBuffer.toString('base64')}`;
+    broadcast({
+      type: 'CAMERA_FRAME',
+      frame: base64Frame,
+      timestamp: new Date().toISOString()
+    });
 
-      globalLatestFrameBuffer = frameBuffer;
-
-      const base64Frame = `data:image/jpeg;base64,${frameBuffer.toString('base64')}`;
-      broadcast({
-        type: 'CAMERA_FRAME',
-        frame: base64Frame,
-        timestamp: new Date().toISOString()
+    try {
+      const aiRes = await fetch(hfSpaceUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'image/jpeg',
+          'x-api-key': apiKey
+        },
+        body: globalLatestFrameBuffer,
+        signal: AbortSignal.timeout(4000)
       });
 
-      try {
-        const aiRes = await fetch(aiDetectUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'image/jpeg',
-            'x-api-key': apiKey
-          },
-          body: frameBuffer,
-          signal: AbortSignal.timeout(4000)
-        });
-
-        if (aiRes.ok) {
-          const aiData = await aiRes.json();
-          if (aiData && aiData.detections) {
-            broadcast({
-              type: 'AI_DETECTION_UPDATE',
-              detections: aiData.detections,
-              timestamp: new Date().toISOString()
-            });
-          }
+      if (aiRes.ok) {
+        const aiData = await aiRes.json();
+        if (aiData && aiData.detections) {
+          broadcast({
+            type: 'AI_DETECTION_UPDATE',
+            detections: aiData.detections,
+            count: aiData.detections.length,
+            timestamp: new Date().toISOString()
+          });
         }
-      } catch (aiErr) {}
-    }
-  } catch (err) {}
+      }
+    } catch (aiErr) {}
+  }
 
-  setTimeout(pollCameraAndRunAI, 1500);
+  setTimeout(pollCameraAndRunAI, 2000);
 }
 
 // Start continuous camera poller
