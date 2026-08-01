@@ -1670,7 +1670,26 @@ app.post(['/rfid/scan', '/api/rfid/scan'], async (req, res) => {
 
     // Broadcast live WebSocket event if active
     if (typeof broadcast === 'function') {
-      broadcast({ type: 'RFID_SCANNED', scan: latestRfidScan });
+      const logObj = {
+        id: Date.now(),
+        timestamp: timestamp,
+        person_name: userName || 'Unknown Card',
+        cardId: cardId,
+        match: isMatch,
+        image_path: null
+      };
+      broadcast({ 
+        type: 'RFID_SCANNED', 
+        scan: latestRfidScan, 
+        log: logObj,
+        event: {
+          id: logObj.id,
+          detection_type: isMatch ? `RFID Granted: ${userName || cardId}` : `RFID Denied: ${cardId}`,
+          zone_name: 'ESP32 Access Point',
+          timestamp: timestamp,
+          is_recognized: isMatch ? 1 : 0
+        }
+      });
     }
 
     res.json({ success: true, ...latestRfidScan });
