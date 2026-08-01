@@ -1573,7 +1573,14 @@ app.delete('/api/faces/:name', async (req, res) => {
 // 8. RFID Management Endpoints
 app.get('/api/rfid', async (req, res) => {
   try {
-    const cards = await db.all("SELECT * FROM rfid_cards ORDER BY registered_at DESC");
+    let cards = await db.all("SELECT * FROM rfid_cards ORDER BY registered_at DESC");
+    if (!cards || cards.length === 0) {
+      await db.run(
+        'INSERT INTO rfid_cards (uid, user_name, status, registered_at) VALUES (?, ?, ?, ?)',
+        ['9A49D55', 'Aditya Mishra (Farm Owner)', 'Active', new Date().toISOString()]
+      );
+      cards = await db.all("SELECT * FROM rfid_cards ORDER BY registered_at DESC");
+    }
     res.json(cards || []);
   } catch (err) {
     console.error('Error fetching RFID cards:', err);
