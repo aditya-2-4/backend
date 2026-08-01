@@ -1868,8 +1868,14 @@ app.get('/api/camera/stream', async (req, res) => {
 });
 
 app.get('/api/camera/snapshot', async (req, res) => {
+  if (globalLatestFrameBuffer && globalLatestFrameBuffer.length > 0) {
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    return res.send(globalLatestFrameBuffer);
+  }
+
   const targetUrl = req.query.resolution === 'hi' 
-    ? (process.env.ESP32_SNAPSHOT_HI_URL || 'http://10.14.51.170/cam-hi.jpg')
+    ? (process.env.ESP32_SNAPSHOT_HI_URL || 'http://10.129.157.170/cam-hi.jpg')
     : (process.env.ESP32_SNAPSHOT_URL || 'http://10.129.157.170/cam-lo.jpg');
 
   try {
@@ -1917,7 +1923,72 @@ app.get('/api/camera/config', async (req, res) => {
   }
 });
 
-// 13. Continuous Background Live Camera Poller & AI Engine
+// 13. ESP32 /detect Raw JPEG Endpoint (Receives ESP32 camera frames, broadcasts to Web App & passes to AI)
+app.post('/detect', express.raw({ type: '*/*', limit: '10mb' }), async (req, res) => {
+  try {
+    let frameBuffer = req.body;
+
+    if (!Buffer.isBuffer(frameBuffer) || frameBuffer.length === 0) {
+      if (req.body && typeof req.body === 'object' && req.body.image) {
+        frameBuffer = Buffer.from(req.body.image, 'base64');
+      } else {
+        return res.status(400).json({ error: 'No image buffer provided' });
+      }
+    }
+
+    // Update global buffer
+    globalLatestFrameBuffer = frameBuffer;
+
+    // Broadcast binary JPEG frame to all connected WebSocket Web Apps & Mobile Apps
+    for (const client of clients) {
+      if (client.readyState === 1) { // OPEN
+        try {
+          client.send(frameBuffer);
+        } catch (e) {}
+      }
+    }
+
+    // Forward to Hugging Face AI detection space
+    let aiDetections = [];
+    try {
+      const hfRes = await fetch('https://adiityamishra99-farmguard-ai-detection.hf.space/detect-raw', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'image/jpeg',
+          'x-api-key': 'secure_esp32_device_shared_api_key_2026'
+        },
+        body: frameBuffer,
+        signal: AbortSignal.timeout(4000)
+      });
+
+      if (hfRes.ok) {
+        const aiData = await hfRes.json();
+        if (aiData && aiData.detections) {
+          aiDetections = aiData.detections;
+          broadcast({
+            type: 'AI_DETECTION_UPDATE',
+            detections: aiDetections,
+            count: aiDetections.length,
+            timestamp: new Date().toISOString()
+          });
+        }
+      }
+    } catch (aiErr) {
+      console.log('AI Proxy note:', aiErr.message);
+    }
+
+    res.status(200).json({
+      success: true,
+      detections: aiDetections,
+      frameSize: frameBuffer.length
+    });
+  } catch (err) {
+    console.error('Error in /detect:', err);
+    res.status(500).json({ error: 'Failed to process camera detection frame' });
+  }
+});
+
+// 14. Continuous Background Live Camera Poller & AI Engine
 async function pollCameraAndRunAI() {
   const hfSpaceUrl = process.env.HF_AI_URL || 'https://adiityamishra99-farmguard-ai-detection.hf.space/detect-raw';
   const apiKey = process.env.DEVICE_API_KEY || 'secure_esp32_device_shared_api_key_2026';
